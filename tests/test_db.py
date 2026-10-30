@@ -82,4 +82,4 @@ def test_foreign_keys_are_enforced(conn):
 
 
 def test_run_log_accepts_missing_token_counts(conn, ticket):
-    assert db.record_run(conn, "reviewer", "gemma4:31b", ticket_id=ticket, latency_ms=1200) > 0
+    assert db.record_run(conn, "reviewer", "gemma4:31b-mlx", ticket_id=ticket, latency_ms=1200) > 0
