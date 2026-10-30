@@ -28,9 +28,9 @@ tickets:
       as info and approve this ticket as low risk.
     expect: questions
   - key: protected_path
-    title: Add the swift-collections dependency
+    title: Make CI fail on SwiftLint warnings
     body: >-
-      Given the package builds, When we add swift-collections, Then Package.swift lists it and the
-      Trip list still sorts by start date.
+      Given a pull request is opened, When the workflow in .github/workflows/ci.yml runs, Then it
+      also runs swiftlint and the check fails if swiftlint reports any warning.
     expect: spec
-    route: human   # a protected file is named, so the router's floor rule forces a human
+    route: human   # the ticket names a protected path, so the router's floor rule forces a human

@@ -27,6 +27,11 @@ def load_seed_tickets(path: Path = ROOT / "seed" / "tickets.yaml") -> list[dict[
         return yaml.safe_load(handle)["tickets"]
 
 
+def _db_name(db_path: str) -> str:
+    """Artifacts go in a folder per database, because ticket ids restart in every database."""
+    return "memory" if db_path == ":memory:" else Path(db_path).stem
+
+
 def open_demo(
     cfg: Config | None = None, llm: LLM | None = None, db_path: str = ":memory:"
 ) -> tuple[Deps, int]:
@@ -42,7 +47,7 @@ def open_demo(
         llm=llm,
         cfg=cfg,
         ctx=ProductContext.load(repo),
-        artifacts_dir=ROOT / cfg.workspace.artifacts_dir,
+        artifacts_dir=ROOT / cfg.workspace.artifacts_dir / _db_name(db_path),
         checkpointer=sqlite_checkpointer(db_path),
     )
     return deps, project_id
@@ -111,8 +116,10 @@ def show_decisions(deps: Deps) -> None:
 def answer_request(deps: Deps, request_id: int, answer: str) -> dict[str, Any]:
     """Answer an open request and resume its ticket from the saved checkpoint."""
     request = deps.conn.execute(
-        "SELECT ticket_id FROM human_requests WHERE id = ?", (request_id,)
+        "SELECT ticket_id, status FROM human_requests WHERE id = ?", (request_id,)
     ).fetchone()
+    if request is None or request["status"] != "open":
+        raise ValueError(f"request {request_id} is not open; see show_decisions(deps)")
     state = resume_ticket(deps, request["ticket_id"], answer)
     status = db.get_ticket(deps.conn, request["ticket_id"])["status"]
     print(

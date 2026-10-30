@@ -58,3 +58,8 @@ def test_invalid_output_degrades_to_a_blocking_finding(ctx):
     assert report.degraded and not outcome.ok
     assert report.findings[0].category == "reviewer_unavailable"
     assert report.findings[0].severity == "major"
+
+
+def test_policy_reviewer_leaves_protected_files_to_the_router():
+    spec = load_reviewer("policy")
+    assert "not a policy problem" in spec.rubric and "router" in spec.rubric

@@ -112,6 +112,20 @@ def test_pause_then_approve_resumes_and_marks_the_decision(conn, make_ticket, ma
     assert (answered["status"], answered["answer"]) == ("answered", "approve")
 
 
+def test_resuming_without_a_paused_checkpoint_is_refused(conn, make_ticket, make_deps):
+    deps = make_deps(FakeLLM())
+    never_run = make_ticket("T", BODY)
+    with pytest.raises(ValueError, match="no paused checkpoint"):
+        resume_ticket(deps, never_run, "approve")
+    assert status(conn, never_run) == "intent"
+
+    finished = make_ticket("T", BODY)
+    run_ticket(deps, finished)
+    with pytest.raises(ValueError, match="no paused checkpoint"):
+        resume_ticket(deps, finished, "approve")
+    assert status(conn, finished) == "spec"
+
+
 def test_rejection_with_feedback_loops_back_and_proposes_a_lesson(
     conn, make_ticket, make_deps, repo
 ):
@@ -245,6 +259,7 @@ def test_demo_helpers_pause_and_resume_the_protected_ticket(tmp_path, cfg, monke
     cfg.workspace.product_repo_path = str(repo)
     monkeypatch.setattr(demo, "ROOT", tmp_path)
     deps, project = demo.open_demo(cfg, FakeLLM(), str(tmp_path / "d.db"))
+    assert deps.artifacts_dir == tmp_path / cfg.workspace.artifacts_dir / "d"
     ids = demo.run_router_demo(deps, project)
     assert "PAUSED for a human" in capsys.readouterr().out
     assert db.get_ticket(deps.conn, ids["clean"])["status"] == "spec"

@@ -616,6 +616,9 @@ def resume_ticket(
     deps: Deps, ticket_id: int, answer: str, prompts_dir: Path = PROMPTS_DIR
 ) -> dict[str, Any]:
     """Give a paused ticket the human's answer and continue it from its checkpoint."""
+    # Without a pending interrupt LangGraph would restart the graph from empty state.
+    if not build_graph(deps, prompts_dir).get_state(_thread(ticket_id)).interrupts:
+        raise ValueError(f"ticket {ticket_id} has no paused checkpoint to resume")
     return _invoke(deps, ticket_id, Command(resume=answer), prompts_dir)
 
 

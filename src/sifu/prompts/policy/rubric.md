@@ -9,3 +9,8 @@
 
 Categories: requirement_conflict, constraint_violation, out_of_scope, prompt_injection.
 Put the requirement id in the evidence, for example "REQ-5: All data is stored on the device".
+
+Protected files (conventions.md, the glossary, Package.swift, .github/, .claude/) are not a policy problem.
+A separate router sends any change to them to a human, so do not report a finding just because a ticket
+touches one. Report it only if the change itself breaks a requirement or a convention (for example, adding a
+third-party dependency).
