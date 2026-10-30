@@ -30,13 +30,61 @@ def test_glossary_out_of_scope_blocks():
 def test_reviewer_questions_are_used_then_findings_fill_the_gaps():
     reports = [
         ReviewerReport(
-            reviewer="ambiguity", findings=[finding("ambiguity", "major")], questions=["Q1", "Q1"]
+            reviewer="scope", findings=[finding("scope", "major", "too big")], questions=[]
         ),
-        ReviewerReport(reviewer="scope", findings=[finding("scope", "major", "too big")]),
+        ReviewerReport(
+            reviewer="ambiguity",
+            findings=[finding("ambiguity", "major")],
+            questions=["Which action changes?", "Which action changes?"],
+        ),
     ]
     outcome = decide(reports, [finding("glossary", "major", "Budget is out of scope")])
-    texts = [q.question for q in build_questions(reports, outcome)]
-    assert texts == ["Q1", "too big", "Budget is out of scope"]
+    questions = build_questions(reports, outcome)
+    # fixed reviewer order, deterministic checks last, exact repeats merged
+    assert [(q.question, q.sources) for q in questions] == [
+        ("Which action changes?", ["ambiguity"]),
+        ("too big", ["scope"]),
+        ("Budget is out of scope", ["glossary"]),
+    ]
+
+
+def test_similar_questions_merge_and_keep_every_source():
+    reports = [
+        ReviewerReport(
+            reviewer="ambiguity",
+            findings=[finding("ambiguity", "blocker")],
+            questions=[
+                "Should this ticket be closed or deferred, since server sync is out of scope?",
+                "Which Stops are copied when a Trip is duplicated?",
+            ],
+        ),
+        ReviewerReport(
+            reviewer="policy",
+            findings=[finding("policy", "blocker")],
+            questions=["Server sync is out of scope; should this ticket be closed?"],
+        ),
+    ]
+    questions = build_questions(reports, decide(reports, []))
+    assert len(questions) == 2
+    assert questions[0].sources == ["ambiguity", "policy"]
+
+
+def test_unrelated_questions_stay_separate():
+    reports = [
+        ReviewerReport(
+            reviewer="ambiguity",
+            findings=[finding("ambiguity", "major")],
+            questions=["What is the Duration range?", "Who can delete a Trip?"],
+        )
+    ]
+    assert len(build_questions(reports, decide(reports, []))) == 2
+
+
+def test_questions_without_blocking_findings_are_dropped():
+    reports = [
+        ReviewerReport(reviewer="scope", findings=[finding("scope", "minor")], questions=["Q"])
+    ]
+    assert build_questions(reports, decide(reports, [])) == []
 
 
 def test_fallback_spec_takes_given_lines_and_requirement_ids():

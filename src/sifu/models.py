@@ -114,8 +114,10 @@ class Spec(BaseModel):
 
 
 class ClarifyingQuestion(BaseModel):
-    """A question for the ticket author, raised when the Design stage cannot write a spec."""
+    """A question for the ticket author, raised when the Design stage cannot write a spec.
+
+    ``sources`` lists every reviewer or check that asked it, because similar questions are merged.
+    """
 
     question: str
-    source: str
-    severity: Severity
+    sources: list[str]
