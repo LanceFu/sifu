@@ -1,0 +1,20 @@
+[
+  {
+    "ticket": "Title: Sync Trips to the cloud\nBody: Save every Trip to our server so a Traveller can open it on another phone.",
+    "output": {
+      "findings": [
+        {"category": "constraint_violation", "severity": "blocker", "message": "Conflicts with the offline-first constraint: all data stays on the device and no account or network is needed.", "evidence": "REQ-5: All data is stored on the device."}
+      ],
+      "questions": ["REQ-5 forbids server storage. Should this ticket be dropped or should the PRD change first?"]
+    }
+  },
+  {
+    "ticket": "Title: Warn on long Day Plans\nBody: Given a Day Plan with total Duration of 961 minutes, When it is shown, Then a warning appears and the plan can still be saved.",
+    "output": {
+      "findings": [
+        {"category": "requirement_conflict", "severity": "info", "message": "Implements REQ-7; link it in the spec.", "evidence": "REQ-7: warning above 960 minutes, not blocking"}
+      ],
+      "questions": []
+    }
+  }
+]

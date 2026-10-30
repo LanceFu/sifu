@@ -50,6 +50,7 @@ class GithubConfig(BaseModel):
 class WorkspaceConfig(BaseModel):
     product_repo_path: str
     worktrees_dir: str
+    artifacts_dir: str = "data/artifacts"
 
 
 class DatabaseConfig(BaseModel):

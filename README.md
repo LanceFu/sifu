@@ -9,8 +9,9 @@ Course project for Agentic AI (University of Waterloo). The target product is th
 
 | Piece | State |
 | --- | --- |
-| Config, models, SQLite schema, state machine, risk router floor rules | Done, 37 tests |
-| LangGraph ticket graph, Design-stage reviewers, human interrupt and resume | Next |
+| Config, models, SQLite schema, state machine, risk router floor rules | Done |
+| LangGraph ticket graph and Design stage (deterministic checks, three parallel reviewers, synthesizer) | Done; tested with a fake model, real Ollama run pending |
+| Risk router wiring, human interrupt and resume, conventions.md loop | Next |
 | FastMCP server, GitHub PR flow, Claude Code implementer node | Later |
 | Evaluation harness (golden set vs single-prompt baseline), Streamlit UI | Later |
 
@@ -59,3 +60,23 @@ src/sifu/db.py       SQLite tables: projects, tickets, events, decisions, human_
 tests/               pytest suite for the deterministic parts
 notebooks/           demo notebook for the course submission
 ```
+
+## Design stage
+
+`sifu.graph.run_ticket` runs one ticket: load, then in parallel the deterministic checks (glossary,
+out-of-scope words, Given / When / Then format, prompt-injection phrases) and three reviewers
+(ambiguity, scope, policy), then the synthesizer. Code decides the outcome: any `major` or `blocker`
+finding, or a reviewer that gave no valid answer, sends the ticket to `needs_human` with questions;
+otherwise the model drafts `spec.md`. Artifacts go to `workspace.artifacts_dir/<ticket id>/`
+(`intent.md`, `spec.md` or `questions.md`). Every agent output and status change is an `events` row.
+
+Each reviewer lives in `src/sifu/prompts/<name>/` as `persona.md`, `rubric.md` and `fewshot.json`.
+Model output is validated with Pydantic, retried with the error, then replaced by a fallback that
+blocks the spec instead of passing it.
+
+```bash
+uv sync --extra agents
+uv run python -m sifu.demo --ticket clean      # needs Ollama and the models in config.yaml
+```
+
+The same call is in `notebooks/design_stage_demo.ipynb`. Seed tickets are in `seed/tickets.yaml`.
