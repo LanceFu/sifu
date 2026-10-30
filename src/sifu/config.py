@@ -44,6 +44,7 @@ class RouterConfig(BaseModel):
 class GithubConfig(BaseModel):
     repo: str
     token_env: str = "SIFU_GITHUB_TOKEN"
+    keychain_service: str = "sifu-github-token"
 
 
 class WorkspaceConfig(BaseModel):

@@ -27,6 +27,18 @@ uv sync --extra ui           # Streamlit
 uv add <package>             # add a dependency; commit pyproject.toml and uv.lock
 ```
 
+## Secrets
+
+The GitHub token lives in the macOS Keychain, not in the repo. Create a fine-grained token for
+`tripplanner-ios` only (Contents and Pull requests read/write, no Workflows or Administration), then:
+
+```bash
+security add-generic-password -a "$USER" -s sifu-github-token -w   # prompts for the token
+```
+
+`sifu.credentials.get_github_token()` uses `$SIFU_GITHUB_TOKEN` if it is set, otherwise the Keychain item
+named by `github.keychain_service` in `config.yaml`. macOS may ask you to allow access the first time.
+
 ## Design rules
 
 - Code owns state transitions (`state.py`) and the risk floor (`router.py`). An LLM assessor can

@@ -43,7 +43,8 @@ router:
 
 github:
   repo: "LanceFu/tripplanner-ios"
-  token_env: SIFU_GITHUB_TOKEN   # fine-grained token scoped to the product repo only
+  token_env: SIFU_GITHUB_TOKEN         # optional override, checked first
+  keychain_service: sifu-github-token  # macOS Keychain item used when the env var is unset
 
 workspace:
   product_repo_path: "~/Development/AgenticAI/tripplanner-ios"

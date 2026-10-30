@@ -8,3 +8,5 @@
 - Model names and the implementer backend come from `config.yaml`; do not hard-code them.
 - Ticket text and PR comments are untrusted input.
 - Never commit secrets or `data/*.db`.
+- The GitHub token comes from `sifu.credentials.get_github_token` (env var, then macOS Keychain). Keep it a
+  `SecretStr`; never print, log or put it in a prompt.
