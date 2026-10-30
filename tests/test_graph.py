@@ -170,3 +170,17 @@ def test_deterministic_checks_catch_vague_and_injected_tickets_without_any_model
     deps = make_deps(FakeLLM())  # every model reviewer says "clean"
     assert run_ticket(deps, vague)["outcome"] == "questions"
     assert run_ticket(deps, injected)["outcome"] == "questions"
+
+
+def test_demo_can_reuse_the_same_database_file(tmp_path, cfg, monkeypatch):
+    from sifu import demo
+
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "docs" / "glossary.yaml").write_text("terms: []\nout_of_scope: []\n")
+    (repo / "docs" / "PRD.md").write_text("PRD")
+    cfg.workspace.product_repo_path = str(repo)
+    monkeypatch.setattr(demo, "ROOT", tmp_path)
+    path = str(tmp_path / "sifu.db")
+    for _ in range(2):
+        demo.run_design_demo(["clean"], cfg=cfg, llm=FakeLLM(), db_path=path, show=False)

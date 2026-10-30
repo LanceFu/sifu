@@ -40,7 +40,7 @@ def run_design_demo(
     repo = Path(cfg.workspace.product_repo_path).expanduser()
     conn = db.connect(db_path)
     db.init_db(conn)
-    project_id = db.create_project(conn, "TripPlanner", str(repo), cfg.github.repo)
+    project_id = db.get_or_create_project(conn, "TripPlanner", str(repo), cfg.github.repo)
     deps = Deps(
         conn=conn,
         llm=llm,

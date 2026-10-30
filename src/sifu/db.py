@@ -117,6 +117,15 @@ def create_project(
     return int(cur.lastrowid)
 
 
+def get_or_create_project(
+    conn: sqlite3.Connection, name: str, repo_path: str, github_repo: str | None = None
+) -> int:
+    row = conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()
+    if row:
+        return int(row["id"])
+    return create_project(conn, name, repo_path, github_repo)
+
+
 def create_ticket(conn: sqlite3.Connection, project_id: int, title: str, body: str = "") -> int:
     with conn:
         cur = conn.execute(
