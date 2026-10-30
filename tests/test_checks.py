@@ -1,4 +1,5 @@
-from sifu.checks import check_acceptance_format, run_checks, screen_injection
+from sifu.checks import check_acceptance_format, protected_mentions, run_checks, screen_injection
+from sifu.router import is_protected
 
 
 def test_injection_phrases_are_blockers():
@@ -27,3 +28,11 @@ def test_run_checks_combines_both():
         "prompt_injection",
         "missing_acceptance_criteria",
     }
+
+
+def test_protected_mentions_feed_the_router_floor_for_files_and_directories():
+    protected = [".github/", "conventions.md", "Package.swift"]
+    text = "Edit .github/workflows/ci.yml and Package.swift, leave Sources alone."
+    found = protected_mentions(text, protected)
+    assert len(found) == 2 and all(is_protected(p, protected) for p in found)
+    assert protected_mentions("Only Sources/Trip.swift changes.", protected) == []

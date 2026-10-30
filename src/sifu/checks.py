@@ -62,5 +62,6 @@ def protected_mentions(text: str, protected_paths: list[str]) -> list[str]:
     for entry in protected_paths:
         needle = entry.rstrip("/").lower()
         if needle and needle in lowered:
-            found.append(entry)
+            # A directory entry becomes a path inside it, so router.is_protected still matches it.
+            found.append(f"{entry}(mentioned)" if entry.endswith("/") else entry)
     return found
