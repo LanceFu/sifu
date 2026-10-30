@@ -137,6 +137,16 @@ def create_ticket(conn: sqlite3.Connection, project_id: int, title: str, body: s
     return ticket_id
 
 
+def append_to_ticket_body(conn: sqlite3.Connection, ticket_id: int, text: str) -> None:
+    """Add a clarification to the end of a ticket's body (a human's answer to a question)."""
+    with conn:
+        conn.execute(
+            "UPDATE tickets SET body = body || ?, updated_at = datetime('now') WHERE id = ?",
+            (f"\n\n{text}", ticket_id),
+        )
+    append_event(conn, ticket_id, "ticket_clarified", "human", {"text": text[:500]})
+
+
 def get_ticket(conn: sqlite3.Connection, ticket_id: int) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
     if row is None:

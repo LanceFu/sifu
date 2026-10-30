@@ -11,7 +11,7 @@ Course project for Agentic AI (University of Waterloo). The target product is th
 | --- | --- |
 | Config, models, SQLite schema, state machine, risk router floor rules | Done |
 | LangGraph ticket graph and Design stage (deterministic checks, three parallel reviewers, synthesizer) | Done; tested with a fake model, real Ollama run pending |
-| Risk router wiring, human interrupt and resume, conventions.md loop | Next |
+| Risk router wiring (two assessors), pause and resume, lessons, FastMCP tools, caps, headless implementer | Done; tested with a fake model, real runs pending |
 | FastMCP server, GitHub PR flow, Claude Code implementer node | Later |
 | Evaluation harness (golden set vs single-prompt baseline), Streamlit UI | Later |
 
@@ -80,3 +80,31 @@ uv run python -m sifu.demo --ticket clean      # needs Ollama and the models in 
 ```
 
 The same call is in `notebooks/design_stage_demo.ipynb`. Seed tickets are in `seed/tickets.yaml`.
+
+## Router, pause and resume
+
+After the Design stage drafts `spec.md`, two assessor models (`models.risk_assessors`) rate it and
+`router.decide` applies the floor rules: a protected path named in the ticket or spec, a conflict with a
+requirement, or a failed assessor all force a human, and the models can only raise the tier. The decision goes to
+the `decisions` table through the `record_decision` MCP tool. Tier HUMAN (or open questions) pauses the graph with a
+LangGraph `interrupt`; the checkpoint is in SQLite, so `resume_ticket` works after a restart.
+
+```python
+from sifu.demo import open_demo, run_router_demo, answer_request
+
+deps, project_id = open_demo(db_path="data/sifu.db")
+run_router_demo(deps, project_id)  # one ticket auto-approved, one paused
+answer_request(deps, 1, "approve")  # or "close", or any text as feedback
+```
+
+A rejection with feedback re-runs the Design stage (at most `router.max_design_rounds` times) and appends a lesson
+to `data/artifacts/conventions.proposed.md`; the approved `conventions.md` in the product repo is never edited
+directly. Each ticket also stops after `router.max_tokens_per_ticket` model tokens.
+
+## Tools and the implementer
+
+`sifu.tools` is a FastMCP server (`get_ticket`, `list_glossary_terms`, `record_decision`). Agents reach it through
+`ToolGateway`, which allow-lists tools per actor (reviewers and assessors get none) and logs every call. 
+`sifu.implementer` runs `claude -p` in a per-ticket git worktree with the allow-list, turn cap and timeout from
+`config.yaml`, a minimal environment (the GitHub token is never passed) and a check of the changed files against the
+protected paths. Try it once with `uv run python scripts/implementer_spike.py --repo <tripplanner-ios>`.

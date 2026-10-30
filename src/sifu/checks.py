@@ -53,3 +53,14 @@ def check_acceptance_format(text: str) -> list[Finding]:
 
 def run_checks(text: str) -> list[Finding]:
     return screen_injection(text) + check_acceptance_format(text)
+
+
+def protected_mentions(text: str, protected_paths: list[str]) -> list[str]:
+    """Protected paths the ticket text names. A match is a floor input, so no model can hide it."""
+    found = []
+    lowered = text.lower()
+    for entry in protected_paths:
+        needle = entry.rstrip("/").lower()
+        if needle and needle in lowered:
+            found.append(entry)
+    return found

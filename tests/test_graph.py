@@ -31,9 +31,9 @@ def test_clean_ticket_produces_spec_and_findings_in_the_database(conn, make_tick
     outputs = actors(conn, ticket, "agent_output")
     assert {"deterministic_checks", "synthesizer"} <= set(outputs)
     assert {f"reviewer:{n}" for n in ("ambiguity", "scope", "policy")} <= set(outputs)
-    assert "awaiting_acceptance" in kinds(conn, ticket)
+    assert {"router_decision", "spec_accepted", "awaiting_plan"} <= set(kinds(conn, ticket))
     runs = conn.execute("SELECT agent FROM runs WHERE ticket_id = ?", (ticket,)).fetchall()
-    assert len(runs) == 4  # three reviewers plus the synthesizer
+    assert len(runs) == 6  # three reviewers, the synthesizer and two assessors
 
 
 def test_reviewers_use_the_configured_models(conn, make_ticket, make_deps, cfg):
@@ -74,6 +74,8 @@ def test_prompt_injection_blocker_is_never_auto_specced(conn, make_ticket, make_
     state = run_ticket(make_deps(FakeLLM({"Policy": blocker})), ticket)
     assert state["outcome"] == "questions"
     assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+    assert "spec_accepted" not in state["facts"]  # the router never saw it
+    assert conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 0
 
 
 def test_out_of_scope_word_is_caught_by_the_glossary_even_if_reviewers_pass(

@@ -5,6 +5,7 @@ import json
 from sifu.llm import LLMResult
 
 CLEAN = json.dumps({"findings": [], "questions": []})
+RISK_AUTO = json.dumps({"tier": 0, "confidence": 0.9, "rationale": "small and clear"})
 SPEC = json.dumps(
     {
         "title": "Reject blank Trip names",
@@ -20,7 +21,13 @@ class FakeLLM:
     """Replies by reviewer persona. A value may be a string or a list used one reply at a time."""
 
     def __init__(self, replies: dict[str, str | list[str]] | None = None) -> None:
-        self.replies = {"Ambiguity": CLEAN, "Scope": CLEAN, "Policy": CLEAN, "Spec Writer": SPEC}
+        self.replies = {
+            "Ambiguity": CLEAN,
+            "Scope": CLEAN,
+            "Policy": CLEAN,
+            "Spec Writer": SPEC,
+            "Risk Assessor": RISK_AUTO,
+        }
         self.replies.update(replies or {})
         self.calls: list[dict] = []
 
@@ -28,6 +35,8 @@ class FakeLLM:
         key = next(k for k in self.replies if k in system)
         self.calls.append({"key": key, "model": model, "user": user, "schema": schema})
         reply = self.replies[key]
+        if isinstance(reply, dict):  # a different reply per model tag
+            reply = reply[model]
         if isinstance(reply, list):
             reply = reply.pop(0) if len(reply) > 1 else reply[0]
         return LLMResult(reply, 10, 5)

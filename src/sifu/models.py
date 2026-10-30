@@ -111,6 +111,7 @@ class Spec(BaseModel):
     acceptance_criteria: list[str] = Field(default_factory=list)
     requirement_refs: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
+    affected_paths: list[str] = Field(default_factory=list)
 
 
 class ClarifyingQuestion(BaseModel):
@@ -121,3 +122,11 @@ class ClarifyingQuestion(BaseModel):
 
     question: str
     sources: list[str]
+
+
+class AssessorOutput(BaseModel):
+    """The JSON a risk assessor model must return."""
+
+    tier: RiskTier
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str

@@ -34,6 +34,8 @@ implementer:
 router:
   merge_mode: risk_based    # manual | risk_based | auto (floor rules apply in every mode)
   max_build_iterations: 3
+  max_design_rounds: 3          # clarification loops in the Design stage before the ticket fails
+  max_tokens_per_ticket: 400000 # model tokens (prompt + completion) per ticket before it fails
   protected_paths:          # a trailing slash means "everything under this directory"
     - ".github/"
     - ".claude/"

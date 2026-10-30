@@ -38,6 +38,8 @@ class ImplementerConfig(BaseModel):
 class RouterConfig(BaseModel):
     merge_mode: Literal["manual", "risk_based", "auto"] = "risk_based"
     max_build_iterations: int = 3
+    max_design_rounds: int = 3
+    max_tokens_per_ticket: int = 400_000
     protected_paths: list[str] = Field(default_factory=list)
 
 
