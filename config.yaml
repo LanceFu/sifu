@@ -1,5 +1,5 @@
 # Sifu configuration. Model names are looked up here, never hard-coded in agents.
-# Confirm Ollama tags with `ollama list` before running (gemma4 tag is a guess).
+# Confirm Ollama tags with `ollama list` before running (tags confirmed against ollama list on 2026-10-30).
 
 ollama:
   base_url: http://localhost:11434
@@ -8,10 +8,10 @@ ollama:
 models:
   author: "qwen3.8:27b"           # intent / spec / plan modes
   spec_reviewer: "qwen3.8:27b"
-  code_reviewer: "gemma4:31b"     # different family from the author (separation of duties)
+  code_reviewer: "gemma4:31b-mlx"     # different family from the author (separation of duties)
   risk_assessors:                 # two families so agreement is a real signal
     - "qwen3.8:27b"
-    - "gemma4:31b"
+    - "gemma4:31b-mlx"
 
 implementer:
   backend: cloud            # cloud | ollama
