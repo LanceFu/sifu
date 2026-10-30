@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sifu"
+version = "0.1.0"
+description = "Sifu: a multi-agent ticket pipeline (LangGraph + Ollama) with a risk-based autonomy router"
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2", "pyyaml"]
+
+[project.optional-dependencies]
+agents = [
+    "langgraph",
+    "langgraph-checkpoint-sqlite",
+    "langchain-core",
+    "langchain-ollama",
+    "fastmcp",
+    "PyGithub",
+]
+ui = ["streamlit"]
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

@@ -1,0 +1,53 @@
+# Sifu configuration. Model names are looked up here, never hard-coded in agents.
+# Confirm Ollama tags with `ollama list` before running (gemma4 tag is a guess).
+
+ollama:
+  base_url: http://localhost:11434
+  num_ctx: 65536            # Claude Code needs 64K+ when the implementer runs locally
+
+models:
+  author: "qwen3.8:27b"           # intent / spec / plan modes
+  spec_reviewer: "qwen3.8:27b"
+  code_reviewer: "gemma4:31b"     # different family from the author (separation of duties)
+  risk_assessors:                 # two families so agreement is a real signal
+    - "qwen3.8:27b"
+    - "gemma4:31b"
+
+implementer:
+  backend: cloud            # cloud | ollama
+  model: null               # cloud: Claude Code default. ollama: e.g. "qwen3-coder:30b"
+  max_turns: 30
+  timeout_seconds: 1800
+  allowed_tools:
+    - Read
+    - Edit
+    - Write
+    - Glob
+    - Grep
+    - "Bash(swift build:*)"
+    - "Bash(swift test:*)"
+    - "Bash(git status:*)"
+    - "Bash(git diff:*)"
+    - "Bash(git add:*)"
+    - "Bash(git commit:*)"
+
+router:
+  merge_mode: risk_based    # manual | risk_based | auto (floor rules apply in every mode)
+  max_build_iterations: 3
+  protected_paths:          # a trailing slash means "everything under this directory"
+    - ".github/"
+    - ".claude/"
+    - "conventions.md"
+    - "docs/glossary.yaml"
+    - "Package.swift"
+
+github:
+  repo: "LanceFu/tripplanner-ios"
+  token_env: SIFU_GITHUB_TOKEN   # fine-grained token scoped to the product repo only
+
+workspace:
+  product_repo_path: "~/Development/AgenticAI/tripplanner-ios"
+  worktrees_dir: "~/Development/AgenticAI/worktrees"
+
+database:
+  path: data/sifu.db
