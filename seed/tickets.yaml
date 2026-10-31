@@ -31,6 +31,7 @@ tickets:
     title: Make CI fail on SwiftLint warnings
     body: >-
       Given a pull request is opened, When the workflow in .github/workflows/ci.yml runs, Then it
-      also runs swiftlint and the check fails if swiftlint reports any warning.
+      also runs `swiftlint --strict` on every .swift file under Sources/ and Tests/, and the check
+      fails if swiftlint reports any warning or error.
     expect: spec
     route: human   # the ticket names a protected path, so the router's floor rule forces a human
