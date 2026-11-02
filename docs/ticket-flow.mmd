@@ -1,0 +1,58 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	load(load)
+	checks(checks)
+	synthesize(synthesize)
+	route(route)
+	accept(accept)
+	escalate_questions(escalate_questions)
+	escalate_decision(escalate_decision)
+	await_human(await_human)
+	approve_decision(approve_decision)
+	revise(revise)
+	close_ticket(close_ticket)
+	plan_gate(plan_gate)
+	build(build)
+	test(test)
+	done(done)
+	review_ambiguity(review_ambiguity)
+	review_scope(review_scope)
+	review_policy(review_policy)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> load;
+	accept --> plan_gate;
+	approve_decision --> plan_gate;
+	await_human -.-> approve_decision;
+	await_human -.-> close_ticket;
+	await_human -.-> revise;
+	build -.-> __end__;
+	build -.-> test;
+	checks --> synthesize;
+	escalate_decision --> await_human;
+	escalate_questions --> await_human;
+	load --> checks;
+	load --> review_ambiguity;
+	load --> review_policy;
+	load --> review_scope;
+	plan_gate -.-> __end__;
+	plan_gate -.-> build;
+	review_ambiguity --> synthesize;
+	review_policy --> synthesize;
+	review_scope --> synthesize;
+	revise -.-> __end__;
+	revise -.-> load;
+	route -.-> accept;
+	route -.-> escalate_decision;
+	synthesize -.-> escalate_questions;
+	synthesize -.-> route;
+	test --> done;
+	close_ticket --> __end__;
+	done --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
