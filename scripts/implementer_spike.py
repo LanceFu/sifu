@@ -34,6 +34,14 @@ def main() -> None:
     parser.add_argument(
         "--spec-file", help="markdown spec to implement (default: blank Trip names)"
     )
+    parser.add_argument(
+        "--backend", choices=["cloud", "ollama"], help="override implementer.backend for this run"
+    )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="run the same ticket on both backends in separate worktrees and print a summary",
+    )
     args = parser.parse_args()
 
     cfg = load_config(ROOT / "config.yaml")
@@ -45,8 +53,39 @@ def main() -> None:
     repo = Path(cfg.workspace.product_repo_path).expanduser()
     conventions = (repo / "conventions.md").read_text(encoding="utf-8")
 
+    if args.compare:
+        runs = {}
+        for backend in ("cloud", "ollama"):
+            run_cfg = cfg.model_copy(update={"implementer": cfg.implementer.using(backend)})
+            runs[backend] = Implementer(run_cfg, tag=backend)(args.ticket, spec, conventions)
+        print(json.dumps({k: asdict(v) for k, v in runs.items()}, indent=2))
+        print(comparison_table(runs))
+        return
+    if args.backend:
+        cfg = cfg.model_copy(update={"implementer": cfg.implementer.using(args.backend)})
     result = Implementer(cfg)(args.ticket, spec, conventions)
     print(json.dumps(asdict(result), indent=2))
+
+
+def comparison_table(runs: dict) -> str:
+    rows = [("backend", "model", "ok", "turns", "seconds", "cost_usd", "files", "denied")]
+    for name, r in runs.items():
+        rows.append(
+            (
+                name,
+                r.model,
+                str(r.ok),
+                str(r.num_turns),
+                f"{r.duration_ms / 1000:.0f}",
+                str(r.cost_usd),
+                str(len(r.changed_files)),
+                str(len(r.permission_denials)),
+            )
+        )
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    return "\n".join(
+        "  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)) for row in rows
+    )
 
 
 if __name__ == "__main__":

@@ -91,7 +91,7 @@ def test_environment_is_minimal_and_never_carries_the_github_token(cfg):
 
 def test_ollama_backend_sets_the_local_endpoint_and_model(cfg):
     cfg.implementer.backend = "ollama"
-    cfg.implementer.model = "qwen3-coder:30b"
+    cfg.implementer.ollama_model = "qwen3-coder:30b"
     env = build_env(cfg, {"PATH": "/bin", "ANTHROPIC_API_KEY": "cloud-key"})
     assert env["ANTHROPIC_BASE_URL"] == cfg.ollama.base_url
     assert (
@@ -150,3 +150,22 @@ def test_worktree_is_reused_and_status_lists_untracked_files(repo, tmp_path):
     (path / "new.txt").write_text("x")
     assert create_worktree(repo, tmp_path / "wt", 9)[0] == path
     assert changed_files(path) == ["new.txt"]
+
+
+def test_result_records_the_backend_and_model(cfg, repo, tmp_path):
+    cfg.implementer.backend = "ollama"
+    out = implementer(cfg, repo, tmp_path, make_runner(reply()))(10, "s", "c")
+    assert out.backend == "ollama" and out.model == "qwen3-coder:30b"
+    cfg.implementer.backend = "cloud"
+    out = implementer(cfg, repo, tmp_path, make_runner(reply()))(11, "s", "c")
+    assert out.backend == "cloud" and out.model == "claude-code default"
+
+
+def test_tagged_runs_get_separate_worktrees_and_branches(cfg, repo, tmp_path):
+    first = implementer(cfg, repo, tmp_path, make_runner(reply()))
+    first.tag = "cloud"
+    second = implementer(cfg, repo, tmp_path, make_runner(reply()))
+    second.tag = "ollama"
+    a, b = first(12, "s", "c"), second(12, "s", "c")
+    assert a.branch == "sifu/ticket-12-cloud" and b.branch == "sifu/ticket-12-ollama"
+    assert a.worktree != b.worktree

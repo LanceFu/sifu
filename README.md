@@ -108,3 +108,9 @@ directly. Each ticket also stops after `router.max_tokens_per_ticket` model toke
 `sifu.implementer` runs `claude -p` in a per-ticket git worktree with the allow-list, turn cap and timeout from
 `config.yaml`, a minimal environment (the GitHub token is never passed) and a check of the changed files against the
 protected paths. Try it once with `uv run python scripts/implementer_spike.py --repo <tripplanner-ios>`.
+
+Switching the implementer: set `implementer.backend` in `config.yaml` to `cloud` (Claude Code with your
+Anthropic login) or `ollama` (Claude Code pointed at the local Ollama server, using `implementer.ollama_model`).
+For one run, use `SIFU_IMPLEMENTER_BACKEND=ollama` or `--backend ollama` on the spike script. `--compare` runs the
+same ticket on both backends in separate worktrees (`ticket-<id>-cloud`, `ticket-<id>-ollama`) and prints a table
+of turns, time, cost and changed files. Every implementer result records its backend and model.

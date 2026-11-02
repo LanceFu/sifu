@@ -41,6 +41,8 @@ class ImplementerResult:
     duration_ms: int = 0
     worktree: str = ""
     branch: str = ""
+    backend: str = ""
+    model: str = ""
 
 
 def default_runner(
@@ -115,10 +117,17 @@ def _git(repo: Path, *args: str) -> str:
     return done.stdout
 
 
-def create_worktree(repo: Path, worktrees_dir: Path, ticket_id: int) -> tuple[Path, str]:
-    """Create (or reuse) ``<worktrees_dir>/ticket-<id>`` on branch ``sifu/ticket-<id>``."""
-    path = worktrees_dir / f"ticket-{ticket_id}"
-    branch = f"sifu/ticket-{ticket_id}"
+def create_worktree(
+    repo: Path, worktrees_dir: Path, ticket_id: int, tag: str | None = None
+) -> tuple[Path, str]:
+    """Create (or reuse) ``<worktrees_dir>/ticket-<id>`` on branch ``sifu/ticket-<id>``.
+
+    A ``tag`` (for example the backend name) is appended so two runs of one ticket can sit side
+    by side when comparing backends.
+    """
+    name = f"ticket-{ticket_id}" + (f"-{tag}" if tag else "")
+    path = worktrees_dir / name
+    branch = f"sifu/{name}"
     if not path.exists():
         worktrees_dir.mkdir(parents=True, exist_ok=True)
         _git(repo, "worktree", "add", "-b", branch, str(path), "HEAD")
@@ -143,11 +152,18 @@ def run_implementer(
     prompt: str,
     runner: Runner = default_runner,
     base_env: Mapping[str, str] | None = None,
+    tag: str | None = None,
 ) -> ImplementerResult:
     """Run one headless session. Never raises for a failed run; the result says what happened."""
-    worktree, branch = create_worktree(repo, worktrees_dir, ticket_id)
+    worktree, branch = create_worktree(repo, worktrees_dir, ticket_id, tag)
     started = time.monotonic()
-    base = ImplementerResult(ok=False, worktree=str(worktree), branch=branch)
+    base = ImplementerResult(
+        ok=False,
+        worktree=str(worktree),
+        branch=branch,
+        backend=cfg.implementer.backend,
+        model=cfg.implementer.model or "claude-code default",
+    )
     try:
         done = runner(
             build_command(cfg, prompt),
@@ -192,9 +208,12 @@ def _fill_from_output(result: ImplementerResult, done: subprocess.CompletedProce
 class Implementer:
     """The callable stored in ``Deps.implementer``."""
 
-    def __init__(self, cfg: Config, runner: Runner = default_runner) -> None:
+    def __init__(
+        self, cfg: Config, runner: Runner = default_runner, tag: str | None = None
+    ) -> None:
         self.cfg = cfg
         self.runner = runner
+        self.tag = tag
 
     def __call__(self, ticket_id: int, spec_text: str, conventions_text: str) -> ImplementerResult:
         return run_implementer(
@@ -204,4 +223,5 @@ class Implementer:
             ticket_id,
             build_prompt(ticket_id, spec_text, conventions_text),
             self.runner,
+            tag=self.tag,
         )
