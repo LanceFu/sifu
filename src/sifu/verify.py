@@ -25,6 +25,13 @@ _COMPILER_LINE = re.compile(
     r"^(?P<file>[^:\s][^:]*):(?P<line>\d+):(?:\d+:)?\s*(?P<sev>error|warning):\s*(?P<msg>.*)$"
 )
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+# Shapes of credentials that must never reach a pull request. The finding names the kind only.
+_SECRETS = {
+    "GitHub token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"),
+    "Anthropic API key": re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"),
+    "AWS access key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    "private key": re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"),
+}
 _LINT_DISABLE = re.compile(r"swiftlint:(disable|disable:next|disable:this|disable:previous)")
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _TAIL_LINES = 15
@@ -182,6 +189,18 @@ def diff_findings(
     """Free checks on the diff itself."""
     found = []
     for name, number, text in added_lines(worktree):
+        for kind, pattern in _SECRETS.items():
+            if pattern.search(text):
+                found.append(
+                    Finding(
+                        "diff",
+                        f"This line looks like a {kind}. Remove it and read the value from the "
+                        "environment instead.",
+                        file=name,
+                        line=number,
+                        rule="secret_in_diff",
+                    )
+                )
         if _LINT_DISABLE.search(text):
             found.append(
                 Finding(

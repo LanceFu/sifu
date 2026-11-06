@@ -145,6 +145,19 @@ def test_added_swiftlint_disable_is_flagged_in_tracked_and_new_files(vcfg, workt
     assert [s["name"] for s in result.steps] == ["diff"]  # no tool ran
 
 
+def test_a_credential_in_the_diff_is_flagged_without_echoing_it(vcfg, worktree):
+    secret = "ghp_" + "a1B2c3D4e5" * 4
+    (worktree / "Sources" / "Trip.swift").write_text(f'let token = "{secret}"\n')
+    (worktree / "Sources" / "Keys.swift").write_text("// -----BEGIN RSA PRIVATE KEY-----\n")
+    result = run_verify(vcfg, worktree, ["Sources/"], fake_runner({}))
+    found = {(f.file, f.rule) for f in result.findings}
+    assert found == {
+        ("Sources/Trip.swift", "secret_in_diff"),
+        ("Sources/Keys.swift", "secret_in_diff"),
+    }
+    assert secret not in json.dumps(result.to_payload())
+
+
 def test_a_disable_that_was_already_there_is_not_blamed_on_the_implementer(vcfg, worktree):
     (worktree / "Sources" / "Old.swift").write_text("// swiftlint:disable all\n")
     git(worktree, "add", "-A")
