@@ -127,3 +127,26 @@ Anthropic login) or `ollama` (Claude Code pointed at the local Ollama server, us
 For one run, use `SIFU_IMPLEMENTER_BACKEND=ollama` or `--backend ollama` on the spike script. `--compare` runs the
 same ticket on both backends in separate worktrees (`ticket-<id>-cloud`, `ticket-<id>-ollama`) and prints a table
 of turns, time, cost and changed files. Every implementer result records its backend and model.
+
+## Pull request and merge
+
+When the verify stage passes and a GitHub client is configured, Sifu publishes the work:
+
+1. `open_pr` commits whatever the implementer left in the worktree (as `github.commit_name`), pushes
+   `sifu/ticket-<id>` and opens a pull request against `github.base_branch`. The PR body carries the
+   spec, the changed files and the checks Sifu ran. The token is read through
+   `sifu.credentials.get_github_token`, passed to git as an environment config header (never on the
+   command line) and scrubbed from every error message.
+2. `merge_decision` waits for the required check (`github.required_check`, up to
+   `ci_timeout_seconds`), then asks the router for a `merge` decision. The floor rules apply in every
+   `router.merge_mode`: a red or pending check, a protected path, or the iteration cap forces a human.
+   `manual` always asks a human, `risk_based` adds the two model assessors, and `auto` skips them
+   (floor rules only). The tier, the rules that fired and each assessor's rationale are posted as a PR
+   comment.
+3. Tier `auto` goes straight to `merge` (re-checks CI, then merges with `github.merge_method`, pinned
+   to the pushed sha). Any other tier pauses the ticket with the PR URL; approving resumes at `merge`,
+   anything else closes the ticket and leaves the PR open.
+
+Failures: a push or PR error marks the ticket Failed (`pr_failed`); a check that turns red between
+approval and merge sends it to Needs Human (`merge_blocked`); a refused merge is Failed
+(`merge_failed`). Tests use a fake GitHub client and a local bare remote, so they need no network.

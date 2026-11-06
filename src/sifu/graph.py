@@ -13,8 +13,10 @@ a real implementer) and only run when the gate facts allow it.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
@@ -30,6 +32,7 @@ from sifu import checks, db, router
 from sifu.assessors import run_assessor
 from sifu.config import Config
 from sifu.context import ProductContext
+from sifu.github import GitHubError
 from sifu.glossary import Glossary, check_text
 from sifu.lessons import propose_lesson
 from sifu.llm import LLM, StructuredOutcome
@@ -43,6 +46,7 @@ from sifu.models import (
     TicketStatus,
 )
 from sifu.planner import draft_plan, outside_spec, render_plan_md, repo_context
+from sifu.pr_flow import PublishError, render_pr_body
 from sifu.reviewers import PROMPTS_DIR, REVIEWER_NAMES, run_reviewer
 from sifu.synthesizer import (
     Outcome,
@@ -93,6 +97,12 @@ class TicketState(TypedDict, total=False):
     status: str
     stage: str
     plan_path: str
+    branch: str
+    worktree: str
+    changed_files: list[str]
+    pr_number: int
+    pr_url: str
+    head_sha: str
     findings: list[dict[str, Any]]
     fingerprint: str
     build_round: int
@@ -111,6 +121,9 @@ class Deps:
     checkpointer: Any = None
     implementer: Callable[..., Any] | None = None
     verifier: Callable[[int, dict[str, Any]], Any] | None = None
+    github: Any = None  # a sifu.github.GitHubClient; with a publisher it turns on the PR flow
+    publisher: Callable[[str, str, str], str] | None = None  # (worktree, branch, message) -> sha
+    sleep: Callable[[float], None] = time.sleep
     lock: threading.RLock = field(default_factory=threading.RLock)
     gateway: ToolGateway | None = None
 
@@ -474,7 +487,10 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
     def escalate_decision(state: TicketState) -> TicketState:
         tid = state["ticket_id"]
         deps.move(tid, TicketStatus.NEEDS_HUMAN)
-        read_path = state["plan_path"] if state.get("stage") == "plan" else state["spec_path"]
+        read_path = {
+            "plan": state.get("plan_path"),
+            "merge": state.get("pr_url"),
+        }.get(state.get("stage", "spec"), state.get("spec_path"))
         with deps.lock:
             row = deps.conn.execute(
                 "SELECT rules_fired FROM decisions WHERE id = ?", (state["decision_id"],)
@@ -514,20 +530,32 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
             return "close_ticket"
         if state["wait_kind"] == "decision" and answer.startswith("approve"):
             return "approve_decision"
+        if (
+            state.get("stage") == "merge"
+        ):  # feedback on a pull request is not a design clarification
+            return "close_ticket"
         return "revise"
 
     def approve_decision(state: TicketState) -> TicketState:
         tid = state["ticket_id"]
         with deps.lock:
             db.resolve_decision(deps.conn, state["decision_id"], "human_approved", "human")
-        deps.move(tid, TicketStatus.SPEC)
         stage = state.get("stage", "spec")
+        if stage == "merge":
+            deps.move(tid, TicketStatus.TEST, state.get("facts", {}))
+        else:
+            deps.move(tid, TicketStatus.SPEC)
         deps.log(tid, f"{stage}_accepted", "human", {"decision_id": state["decision_id"]})
+        if stage == "merge":
+            return {"status": "test"}
         fact = "plan_accepted" if stage == "plan" else "spec_accepted"
         return {"facts": {**state.get("facts", {}), fact: True}, "status": "spec"}
 
     def after_approve(state: TicketState) -> str:
-        return "plan" if state.get("stage", "spec") == "spec" and needs_plan(state) else "plan_gate"
+        stage = state.get("stage", "spec")
+        if stage == "merge":
+            return "merge"
+        return "plan" if stage == "spec" and needs_plan(state) else "plan_gate"
 
     def revise(state: TicketState) -> TicketState:
         tid = state["ticket_id"]
@@ -614,6 +642,9 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
             "facts": {**facts, "has_diff": bool(result.changed_files)},
             "status": "build",
             "session_id": result.session_id or state.get("session_id") or "",
+            "branch": result.branch,
+            "worktree": result.worktree,
+            "changed_files": list(result.changed_files),
         }
 
     def after_build(state: TicketState) -> str:
@@ -654,7 +685,157 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
     def after_verify(state: TicketState) -> str:
         if state.get("status") == "needs_human":
             return END
-        return "build" if state.get("findings") else "done"
+        if state.get("findings"):
+            return "build"
+        if deps.github is not None and deps.publisher is not None and state.get("branch"):
+            return "open_pr"
+        return "done"
+
+    # ---- pull request and merge --------------------------------------------------------------
+    def fail(tid: int, reason: str, exc: Exception) -> TicketState:
+        deps.log(tid, "error", "supervisor", {"type": type(exc).__name__, "message": str(exc)})
+        deps.move(tid, TicketStatus.FAILED)
+        return {"status": "failed", "outcome": reason}
+
+    def open_pr(state: TicketState) -> TicketState:
+        """Commit and push the branch, then open the pull request."""
+        tid = state["ticket_id"]
+        assert deps.github is not None and deps.publisher is not None
+        spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
+        verify_event = [e for e in db.list_events(deps.conn, tid) if e["kind"] == "verify_result"]
+        verify = json.loads(verify_event[-1]["payload"]) if verify_event else None
+        try:
+            sha = deps.publisher(state["worktree"], state["branch"], f"{state['title']} (#{tid})")
+            number, url = deps.github.create_pr(
+                head=state["branch"],
+                base=cfg.github.base_branch,
+                title=f"{state['title']} (Sifu ticket {tid})",
+                body=render_pr_body(tid, spec_text, state.get("changed_files", []), verify),
+            )
+        except (GitHubError, PublishError) as exc:
+            return fail(tid, "pr_failed", exc)
+        deps.log(tid, "pr_opened", "supervisor", {"number": number, "url": url, "sha": sha})
+        return {"pr_number": number, "pr_url": url, "head_sha": sha}
+
+    def after_pr(state: TicketState) -> str:
+        return END if state.get("status") == "failed" else "merge_decision"
+
+    def wait_for_ci(sha: str) -> bool | None:
+        """True/False once the required check finishes; None if still pending at timeout."""
+        waited = 0
+        while True:
+            status = deps.github.ci_status(sha)
+            if status != "pending":
+                return status == "success"
+            if waited >= cfg.github.ci_timeout_seconds:
+                return None
+            deps.sleep(cfg.github.ci_poll_seconds)
+            waited += cfg.github.ci_poll_seconds
+
+    def merge_decision(state: TicketState) -> TicketState:
+        """The router decides who merges: floor rules, plus assessors unless merge_mode is auto."""
+        tid = state["ticket_id"]
+        try:
+            ci = wait_for_ci(state["head_sha"])
+        except GitHubError as exc:
+            return fail(tid, "ci_check_failed", exc)
+        files = state.get("changed_files", [])
+        context = DecisionContext(
+            decision_type=DecisionType.MERGE,
+            touched_paths=files,
+            iteration=state.get("build_round", 0),
+            ci_green=ci,
+        )
+        spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
+        merge_text = (
+            f"{spec_text}\n\nChanged files: {', '.join(files) or 'none'}\n"
+            f"Required check ({cfg.github.required_check}): "
+            f"{ {True: 'passed', False: 'failed', None: 'pending'}[ci] }"
+        )
+        assessments = []
+        if cfg.router.merge_mode != "auto":
+
+            def assess(model: str):
+                deps.check_budget(tid)
+                assessment, outcome = run_assessor(
+                    model,
+                    decision_type=DecisionType.MERGE,
+                    title=state["title"],
+                    spec_text=merge_text,
+                    ctx=deps.ctx,
+                    llm=deps.llm,
+                    prompts_dir=prompts_dir,
+                )
+                deps.log_run(tid, f"assessor:{model}", model, outcome)
+                return assessment
+
+            with ThreadPoolExecutor(max_workers=len(cfg.models.risk_assessors)) as pool:
+                assessments = list(pool.map(assess, cfg.models.risk_assessors))
+        result = router.decide(context, assessments, cfg.router)
+        decision_id = deps.tool(
+            "supervisor",
+            "record_decision",
+            log_for=tid,
+            ticket_id=tid,
+            decision_type=DecisionType.MERGE.value,
+            final_tier=int(result.final_tier),
+            floor_tier=int(result.floor_tier),
+            rules_fired=result.rules_fired,
+            assessments=[a.model_dump(mode="json") for a in assessments],
+        )
+        deps.log(
+            tid,
+            "router_decision",
+            "router",
+            {
+                "decision_id": decision_id,
+                "tier": int(result.final_tier),
+                "rules": result.rules_fired,
+                "stage": "merge",
+                "ci_green": ci,
+            },
+        )
+        comment = (
+            f"Sifu merge decision: tier {result.final_tier.name.lower()}. "
+            f"Rules fired: {', '.join(result.rules_fired) or 'none'}. "
+            f"Required check: {merge_text.rsplit(': ', 1)[-1]}."
+        )
+        if assessments:
+            comment += "\n\n" + "\n".join(f"- {a.assessor}: {a.rationale}" for a in assessments)
+        try:
+            deps.github.comment(state["pr_number"], comment)
+        except GitHubError as exc:
+            deps.log(tid, "error", "supervisor", {"type": "GitHubError", "message": str(exc)})
+        facts = {**state.get("facts", {}), "ci_green": bool(ci)}
+        return {
+            "tier": int(result.final_tier),
+            "decision_id": decision_id,
+            "stage": "merge",
+            "facts": facts,
+        }
+
+    def after_merge_decision(state: TicketState) -> str:
+        return "merge" if state["tier"] == RiskTier.AUTO else "escalate_decision"
+
+    def merge(state: TicketState) -> TicketState:
+        """Merge the pull request, unless the required check is not green by now."""
+        tid = state["ticket_id"]
+        try:
+            if deps.github.ci_status(state["head_sha"]) != "success":
+                deps.log(tid, "merge_blocked", "supervisor", {"reason": "ci_not_green"})
+                deps.move(tid, TicketStatus.NEEDS_HUMAN)
+                return {"status": "needs_human", "outcome": "merge_blocked"}
+            merged = deps.github.merge(
+                state["pr_number"], cfg.github.merge_method, state["head_sha"]
+            )
+        except GitHubError as exc:
+            return fail(tid, "merge_failed", exc)
+        if not merged:
+            return fail(tid, "merge_failed", RuntimeError("GitHub did not merge the pull request"))
+        facts = {**state.get("facts", {}), "ci_green": True}
+        deps.move(tid, TicketStatus.DONE, facts)
+        deps.log(tid, "pr_merged", "supervisor", {"number": state["pr_number"]})
+        return {"facts": facts, "status": "done"}
 
     def done(state: TicketState) -> TicketState:  # stub
         deps.move(state["ticket_id"], TicketStatus.DONE, state.get("facts"))
@@ -677,6 +858,9 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         "plan_gate": plan_gate,
         "build": build,
         "verify": verify,
+        "open_pr": open_pr,
+        "merge_decision": merge_decision,
+        "merge": merge,
         "done": done,
     }.items():
         graph.add_node(name, fn)
@@ -697,12 +881,17 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
     graph.add_conditional_edges(
         "await_human", after_answer, ["close_ticket", "approve_decision", "revise"]
     )
-    graph.add_conditional_edges("approve_decision", after_approve, ["plan", "plan_gate"])
     graph.add_conditional_edges("revise", after_revise, ["load", END])
     graph.add_edge("close_ticket", END)
     graph.add_conditional_edges("plan_gate", after_gate, ["build", END])
     graph.add_conditional_edges("build", after_build, ["verify", END])
-    graph.add_conditional_edges("verify", after_verify, ["build", "done", END])
+    graph.add_conditional_edges("verify", after_verify, ["build", "done", "open_pr", END])
+    graph.add_conditional_edges("open_pr", after_pr, ["merge_decision", END])
+    graph.add_conditional_edges(
+        "merge_decision", after_merge_decision, ["merge", "escalate_decision"]
+    )
+    graph.add_conditional_edges("approve_decision", after_approve, ["plan", "plan_gate", "merge"])
+    graph.add_edge("merge", END)
     graph.add_edge("done", END)
     return graph.compile(checkpointer=deps.checkpointer)
 

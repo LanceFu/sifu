@@ -71,6 +71,13 @@ github:
   repo: "LanceFu/tripplanner-ios"
   token_env: SIFU_GITHUB_TOKEN         # optional override, checked first
   keychain_service: sifu-github-token  # macOS Keychain item used when the env var is unset
+  base_branch: main
+  required_check: test      # the Actions check Sifu waits for before the merge decision
+  ci_timeout_seconds: 600
+  ci_poll_seconds: 15
+  merge_method: squash      # squash | merge | rebase
+  commit_name: Sifu
+  commit_email: sifu@users.noreply.github.com
 
 workspace:
   product_repo_path: "~/Development/AgenticAI/tripplanner-ios"

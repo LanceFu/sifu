@@ -93,6 +93,13 @@ class GithubConfig(BaseModel):
     repo: str
     token_env: str = "SIFU_GITHUB_TOKEN"
     keychain_service: str = "sifu-github-token"
+    base_branch: str = "main"
+    required_check: str = "test"  # the check run Sifu waits for before the merge decision
+    ci_timeout_seconds: int = 600
+    ci_poll_seconds: int = 15
+    merge_method: Literal["squash", "merge", "rebase"] = "squash"
+    commit_name: str = "Sifu"
+    commit_email: str = "sifu@users.noreply.github.com"
 
 
 class WorkspaceConfig(BaseModel):
