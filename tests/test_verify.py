@@ -39,8 +39,8 @@ def fake_runner(results, seen=None):
     def runner(cmd, env, cwd, timeout):
         if seen is not None:
             seen.append(cmd)
-        code, out = results.get(cmd[0] + (":" + cmd[1] if cmd[0] == "swift" else ""), (0, ""))
-        return subprocess.CompletedProcess(cmd, code, out, "")
+        code, out, *err = results.get(cmd[0] + (":" + cmd[1] if cmd[0] == "swift" else ""), (0, ""))
+        return subprocess.CompletedProcess(cmd, code, out, err[0] if err else "")
 
     return runner
 
@@ -200,3 +200,11 @@ def test_fallback_keeps_error_lines_and_drops_the_long_command_line():
     finding = tail_finding("build", REAL_BUILD_FAILURE.format(wt="/x"), 1)
     assert all(len(line) < 300 for line in finding.message.splitlines())
     assert "swift-frontend" not in finding.message and "Build failed" in finding.message
+
+
+def test_compiler_errors_on_stderr_are_parsed_even_when_stdout_has_text(vcfg, worktree):
+    err = f"{worktree}/Sources/Trip.swift:16:23: error: cannot convert value\n"
+    runner = fake_runner({"swift:build": (1, "Building for debugging...\n", err)})
+    result = run_verify(vcfg, worktree, [], runner)
+    [one] = result.findings
+    assert (one.file, one.line, one.rule) == ("Sources/Trip.swift", 16, "error")

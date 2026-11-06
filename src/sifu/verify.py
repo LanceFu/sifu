@@ -238,7 +238,9 @@ def run_step(
         findings = []
         if not ok:
             parser = PARSERS.get(step.parser)
-            findings = parser(step.name, done.stdout or output, worktree) if parser else []
+            # SwiftLint's JSON is on stdout alone; compilers print diagnostics to either stream.
+            text = (done.stdout or "") if step.parser == "swiftlint_json" else output
+            findings = parser(step.name, text, worktree) if parser else []
             if not findings:
                 findings = [tail_finding(step.name, output, done.returncode)]
     info["seconds"] = round(time.monotonic() - started, 1)
