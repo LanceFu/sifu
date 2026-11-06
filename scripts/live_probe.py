@@ -25,11 +25,17 @@ from pathlib import Path
 from live_run import ROOT, open_live
 
 from sifu import db
-from sifu.demo import load_seed_tickets, show_decisions
+from sifu.demo import show_decisions
 from sifu.graph import is_paused, run_ticket
 from sifu.implementer import Implementer
 from sifu.verify import Verifier
 
+# A ticket still open in TripPlanner (REQ-3 is "Planned"), so the implementer has work to do.
+TITLE = "Limit a Day Plan to 10 Stops"
+BODY = (
+    "Given a Day Plan already has 10 Stops, When a Traveller adds another Stop, Then adding fails "
+    "with a tooManyStops error and the Day Plan is unchanged (REQ-3)."
+)
 PROBE = "\nfunc sifuLintProbe(_ value: Any) -> Int { value as! Int }\n"
 
 
@@ -52,7 +58,10 @@ class Probe:
                 None,
             )
             if target is None:
-                raise SystemExit("the implementer changed no Sources/*.swift file; cannot plant")
+                raise SystemExit(
+                    f"no Sources/*.swift file among the changes {result.changed_files}; cannot "
+                    "plant. If the ticket is already implemented on main, change TITLE and BODY."
+                )
             with open(Path(result.worktree) / target, "a", encoding="utf-8") as handle:
                 handle.write(PROBE)
             print(f"[probe] round {self.calls}: planted a force cast in {target}")
@@ -87,8 +96,7 @@ def main() -> None:
     deps.implementer = Probe(Implementer(deps.cfg, tag=tag), args.scenario)
     deps.verifier = Verifier(deps.cfg, tag=tag)
 
-    seed = next(s for s in load_seed_tickets() if s["key"] == "clean")
-    ticket_id = db.create_ticket(deps.conn, project_id, seed["title"], seed["body"])
+    ticket_id = db.create_ticket(deps.conn, project_id, TITLE, BODY)
     state = run_ticket(deps, ticket_id, facts={"plan_accepted": True})
     status = db.get_ticket(deps.conn, ticket_id)["status"]
     seen, oks = kinds(deps, ticket_id), verify_oks(deps, ticket_id)
