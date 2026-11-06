@@ -170,3 +170,33 @@ def test_fingerprint_ignores_line_numbers_but_not_content():
     c = VerifyResult(False, [Finding("t", "other", "A.swift", 3, "r")])
     assert a.fingerprint == b.fingerprint != c.fingerprint
     assert a.to_payload(limit=0)["findings"] == [] and a.to_payload()["finding_count"] == 1
+
+
+# Real output from `swift build` on a Mac (trimmed): colour codes, a code frame that repeats the
+# error, and a very long failed-command line.
+REAL_BUILD_FAILURE = (
+    "Building for debugging...\n[2\u2009/\u20097] TripPlannerCore\n\n"
+    "error: SwiftCompile normal arm64 failed with a nonzero exit code.\n"
+    "{wt}/Sources/TripPlannerCore/Trip.swift:16:23: \x1b[1;31merror: \x1b[1;39m"
+    "cannot convert value of type 'String' to specified type 'Int'\x1b[0;0m\n"
+    '\x1b[0;36m16 |\x1b[0;0m     let broken: Int = \x1b[4;39m"x"\x1b[0;0m\n'
+    "   \x1b[0;36m|\x1b[0;0m                       `- \x1b[1;31merror: \x1b[1;39m"
+    "cannot convert value of type 'String' to specified type 'Int'\x1b[0;0m\n"
+    "Failed frontend command:\n/Applications/Xcode.app/usr/bin/swift-frontend -frontend "
+    + "-flag " * 200
+    + "\nerror: Build failed"
+)
+
+
+def test_real_swift_build_output_gives_one_clean_finding(tmp_path):
+    out = REAL_BUILD_FAILURE.format(wt=tmp_path)
+    [one] = parse_compiler("build", out, tmp_path)
+    assert (one.file, one.line, one.rule) == ("Sources/TripPlannerCore/Trip.swift", 16, "error")
+    assert one.message == "cannot convert value of type 'String' to specified type 'Int'"
+    assert "\x1b" not in one.message
+
+
+def test_fallback_keeps_error_lines_and_drops_the_long_command_line():
+    finding = tail_finding("build", REAL_BUILD_FAILURE.format(wt="/x"), 1)
+    assert all(len(line) < 300 for line in finding.message.splitlines())
+    assert "swift-frontend" not in finding.message and "Build failed" in finding.message

@@ -26,7 +26,18 @@ _COMPILER_LINE = re.compile(
 )
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 _LINT_DISABLE = re.compile(r"swiftlint:(disable|disable:next|disable:this|disable:previous)")
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _TAIL_LINES = 15
+_MAX_LINE = 240  # swift prints whole compiler command lines on failure; keep findings readable
+
+
+def strip_ansi(text: str) -> str:
+    """Tools colour their output even when piped; the colour codes would hide the file:line."""
+    return _ANSI.sub("", text)
+
+
+def _short(line: str) -> str:
+    return line if len(line) <= _MAX_LINE else line[:_MAX_LINE] + " ..."
 
 
 @dataclass(frozen=True)
@@ -80,19 +91,19 @@ def _relative(path: str, worktree: Path) -> str:
 
 def parse_compiler(step: str, output: str, worktree: Path) -> list[Finding]:
     """``file:line:col: error|warning: message`` lines, as printed by swiftc and XCTest."""
-    found = []
-    for raw in output.splitlines():
+    found: list[Finding] = []
+    for raw in strip_ansi(output).splitlines():
         match = _COMPILER_LINE.match(raw.strip())
         if match:
-            found.append(
-                Finding(
-                    source=step,
-                    file=_relative(match["file"], worktree),
-                    line=int(match["line"]),
-                    rule=match["sev"],
-                    message=match["msg"].strip(),
-                )
+            finding = Finding(
+                source=step,
+                file=_relative(match["file"], worktree),
+                line=int(match["line"]),
+                rule=match["sev"],
+                message=match["msg"].strip(),
             )
+            if finding not in found:  # the same diagnostic is often printed twice
+                found.append(finding)
     return found
 
 
@@ -118,8 +129,10 @@ def parse_swiftlint_json(step: str, output: str, worktree: Path) -> list[Finding
 
 def tail_finding(step: str, output: str, code: int) -> Finding:
     """Fallback when a step failed but its output had nothing the parser understood."""
-    tail = "\n".join(output.strip().splitlines()[-_TAIL_LINES:])
-    return Finding(source=step, rule=f"exit {code}", message=tail or "no output")
+    lines = [_short(line) for line in strip_ansi(output).strip().splitlines()]
+    errors = [line for line in lines if "error:" in line]
+    shown = errors[:_TAIL_LINES] if errors else lines[-_TAIL_LINES:]
+    return Finding(source=step, rule=f"exit {code}", message="\n".join(shown) or "no output")
 
 
 PARSERS: dict[str, Callable[[str, str, Path], list[Finding]]] = {
