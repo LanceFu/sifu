@@ -37,7 +37,9 @@ class GitHubClient:
         except Exception as exc:  # PyGithub raises several types
             raise GitHubError(f"{what} failed: {type(exc).__name__}: {str(exc)[:200]}") from exc
 
-    def create_pr(self, *, head: str, base: str, title: str, body: str) -> tuple[int, str]:
+    def create_pr(
+        self, *, head: str, base: str, title: str, body: str, draft: bool = False
+    ) -> tuple[int, str]:
         pr = self._call(
             "create pull request",
             self.repo.create_pull,
@@ -45,6 +47,7 @@ class GitHubClient:
             body=body,
             head=head,
             base=base,
+            draft=draft,
         )
         return int(pr.number), str(pr.html_url)
 

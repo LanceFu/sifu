@@ -46,7 +46,7 @@ from sifu.models import (
     TicketStatus,
 )
 from sifu.planner import draft_plan, outside_spec, render_plan_md, repo_context
-from sifu.pr_flow import PublishError, render_pr_body
+from sifu.pr_flow import PublishError, render_findings, render_pr_body
 from sifu.reviewers import PROMPTS_DIR, REVIEWER_NAMES, run_reviewer
 from sifu.synthesizer import (
     Outcome,
@@ -673,7 +673,13 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         if reason:
             deps.log(tid, reason, "supervisor", {"rounds": rounds})
             deps.move(tid, TicketStatus.NEEDS_HUMAN)
-            return {"status": "needs_human", "outcome": reason, "build_round": rounds}
+            kept = [asdict(f) for f in result.findings[:limit]]
+            return {
+                "status": "needs_human",
+                "outcome": reason,
+                "build_round": rounds,
+                "findings": kept,
+            }
         findings = [asdict(f) for f in result.findings[:limit]]
         return {
             "status": "test",
@@ -683,13 +689,12 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         }
 
     def after_verify(state: TicketState) -> str:
+        can_publish = deps.github is not None and deps.publisher is not None and state.get("branch")
         if state.get("status") == "needs_human":
-            return END
+            return "draft_pr" if can_publish else END
         if state.get("findings"):
             return "build"
-        if deps.github is not None and deps.publisher is not None and state.get("branch"):
-            return "open_pr"
-        return "done"
+        return "open_pr" if can_publish else "done"
 
     # ---- pull request and merge --------------------------------------------------------------
     def fail(tid: int, reason: str, exc: Exception) -> TicketState:
@@ -715,6 +720,35 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         except (GitHubError, PublishError) as exc:
             return fail(tid, "pr_failed", exc)
         deps.log(tid, "pr_opened", "supervisor", {"number": number, "url": url, "sha": sha})
+        return {"pr_number": number, "pr_url": url, "head_sha": sha}
+
+    def draft_pr(state: TicketState) -> TicketState:
+        """Verify gave up: push the branch as a draft PR so a human can see what is left."""
+        tid = state["ticket_id"]
+        assert deps.github is not None and deps.publisher is not None
+        findings = state.get("findings", [])
+        reason = state.get("outcome", "")
+        try:
+            sha = deps.publisher(state["worktree"], state["branch"], f"{state['title']} (#{tid})")
+            number, url = deps.github.create_pr(
+                head=state["branch"],
+                base=cfg.github.base_branch,
+                title=f"[Draft] {state['title']} (Sifu ticket {tid})",
+                body=render_pr_body(
+                    tid,
+                    Path(state["spec_path"]).read_text(encoding="utf-8"),
+                    state.get("changed_files", []),
+                    None,
+                ),
+                draft=True,
+            )
+            deps.github.comment(
+                number, render_findings(reason, state.get("build_round", 0), findings)
+            )
+        except (GitHubError, PublishError) as exc:  # the ticket is already waiting for a human
+            deps.log(tid, "error", "supervisor", {"type": type(exc).__name__, "message": str(exc)})
+            return {}
+        deps.log(tid, "draft_pr_opened", "supervisor", {"number": number, "url": url, "sha": sha})
         return {"pr_number": number, "pr_url": url, "head_sha": sha}
 
     def after_pr(state: TicketState) -> str:
@@ -859,6 +893,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         "build": build,
         "verify": verify,
         "open_pr": open_pr,
+        "draft_pr": draft_pr,
         "merge_decision": merge_decision,
         "merge": merge,
         "done": done,
@@ -885,7 +920,10 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
     graph.add_edge("close_ticket", END)
     graph.add_conditional_edges("plan_gate", after_gate, ["build", END])
     graph.add_conditional_edges("build", after_build, ["verify", END])
-    graph.add_conditional_edges("verify", after_verify, ["build", "done", "open_pr", END])
+    graph.add_conditional_edges(
+        "verify", after_verify, ["build", "done", "open_pr", "draft_pr", END]
+    )
+    graph.add_edge("draft_pr", END)
     graph.add_conditional_edges("open_pr", after_pr, ["merge_decision", END])
     graph.add_conditional_edges(
         "merge_decision", after_merge_decision, ["merge", "escalate_decision"]

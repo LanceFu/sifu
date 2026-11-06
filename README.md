@@ -150,3 +150,8 @@ When the verify stage passes and a GitHub client is configured, Sifu publishes t
 Failures: a push or PR error marks the ticket Failed (`pr_failed`); a check that turns red between
 approval and merge sends it to Needs Human (`merge_blocked`); a refused merge is Failed
 (`merge_failed`). Tests use a fake GitHub client and a local bare remote, so they need no network.
+
+When the verify loop gives up (`verify_cap` or `verify_no_progress`) and GitHub is configured, Sifu
+pushes the branch and opens a **draft** pull request titled `[Draft] ...` with a comment listing the
+unresolved findings, so a human can pick the work up on GitHub. The ticket stays in Needs Human. If
+the push or draft PR fails, the error is logged and the ticket still waits for a human.

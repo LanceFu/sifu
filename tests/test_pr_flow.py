@@ -14,7 +14,8 @@ from sifu.config import GithubConfig  # noqa: E402
 from sifu.github import GitHubError  # noqa: E402
 from sifu.graph import is_paused, resume_ticket, run_ticket  # noqa: E402
 from sifu.implementer import ImplementerResult  # noqa: E402
-from sifu.pr_flow import PublishError, publish_branch, render_pr_body  # noqa: E402
+from sifu.pr_flow import PublishError, publish_branch, render_findings, render_pr_body  # noqa: E402
+from sifu.verify import Finding, VerifyResult  # noqa: E402
 from tests.fakes import FakeLLM  # noqa: E402
 
 BODY = "Given a Traveller saves a Trip, When the name is blank, Then nameBlank is thrown."
@@ -45,9 +46,9 @@ class FakeGitHub:
         if self.fail_on == what:
             raise GitHubError(f"{what} failed")
 
-    def create_pr(self, *, head, base, title, body):
+    def create_pr(self, *, head, base, title, body, draft=False):
         self._maybe_fail("create_pr")
-        self.pr = {"head": head, "base": base, "title": title, "body": body}
+        self.pr = {"head": head, "base": base, "title": title, "body": body, "draft": draft}
         return 7, "https://github.com/o/r/pull/7"
 
     def comment(self, number, body):
@@ -199,6 +200,44 @@ def test_without_github_the_ticket_ends_at_done_as_before(conn, make_deps, make_
     deps.implementer, deps.verifier = Implementer(), None
     ticket = make_ticket("T", BODY)
     assert run_ticket(deps, ticket, facts={"plan_accepted": True})["status"] == "done"
+
+
+def test_a_verify_cap_opens_a_draft_pr_with_the_findings(conn, cfg, make_deps, make_ticket):
+    cfg.router.max_build_iterations = 2
+    deps = make_deps(FakeLLM())
+    deps.implementer = Implementer()
+    counter = iter(range(100))
+    deps.verifier = lambda tid, spec: VerifyResult(
+        False, [Finding("swiftlint", f"Too long {next(counter)}", "Sources/Trip.swift", 4, "len")]
+    )
+    gh = FakeGitHub()
+    deps.github, deps.publisher, deps.sleep = gh, publisher, lambda s: None
+    ticket = make_ticket("T", BODY)
+    state = run_ticket(deps, ticket, facts={"plan_accepted": True})
+    assert state["outcome"] == "verify_cap" and gh.merges == []
+    assert gh.pr["draft"] is True and gh.pr["title"].startswith("[Draft]")
+    assert "swiftlint [len] Sources/Trip.swift:4" in gh.comments[0][1]
+    assert "draft_pr_opened" in kinds(conn, ticket)
+    assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+
+
+def test_a_draft_pr_failure_leaves_the_ticket_waiting_for_a_human(
+    conn, cfg, make_deps, make_ticket
+):
+    cfg.router.max_build_iterations = 1
+    deps = make_deps(FakeLLM())
+    deps.implementer = Implementer()
+    deps.verifier = lambda tid, spec: VerifyResult(False, [Finding("build", "boom", "a.swift", 1)])
+    deps.github, deps.publisher = FakeGitHub(fail_on="create_pr"), publisher
+    ticket = make_ticket("T", BODY)
+    state = run_ticket(deps, ticket, facts={"plan_accepted": True})
+    assert state["outcome"] == "verify_cap"
+    assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+
+
+def test_findings_comment_names_the_reason():
+    text = render_findings("verify_no_progress", 2, [{"source": "build", "message": "bad"}])
+    assert "same findings came back" in text and "- build: bad" in text
 
 
 # ---- publish_branch against a local bare remote -------------------------------------------

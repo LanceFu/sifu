@@ -85,3 +85,21 @@ def render_pr_body(
         f"Opened by Sifu for ticket {ticket_id}.\n\n## Specification\n\n{spec_text.strip()}\n\n"
         f"## Changed files\n\n{files}\n\n## Checks run by Sifu\n\n{steps or 'not run'}\n"
     )
+
+
+def render_findings(reason: str, rounds: int, findings: list[Mapping[str, Any]]) -> str:
+    """The comment on a draft PR: why Sifu stopped and what is still wrong."""
+    why = {
+        "verify_cap": f"the build loop hit its cap after {rounds} rounds",
+        "verify_no_progress": "the same findings came back after a fix attempt",
+    }.get(reason, reason)
+    lines = []
+    for f in findings:
+        where = f"{f.get('file')}:{f['line']}" if f.get("file") and f.get("line") else f.get("file")
+        rule = f" [{f['rule']}]" if f.get("rule") else ""
+        head = f"{f.get('source')}{rule} {where or ''}".strip()
+        lines.append(f"- {head}: {f.get('message')}")
+    return (
+        f"Sifu stopped because {why}. This draft needs a human.\n\n"
+        f"Unresolved findings:\n\n{chr(10).join(lines) or '- none recorded'}"
+    )

@@ -18,6 +18,7 @@ class Repo:
 
     def create_pull(self, **kw):
         self._check()
+        self.created = kw
         return NS(number=3, html_url="https://github.com/o/r/pull/3")
 
     def get_pull(self, number):
@@ -76,3 +77,9 @@ def test_comment_is_posted():
 def test_any_failure_becomes_a_github_error():
     with pytest.raises(GitHubError):
         client(Repo(boom="rate limited")).ci_status("sha")
+
+
+def test_a_draft_flag_reaches_github():
+    repo = Repo()
+    client(repo).create_pr(head="h", base="main", title="t", body="b", draft=True)
+    assert repo.created["draft"] is True
