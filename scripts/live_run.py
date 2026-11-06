@@ -28,9 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DB = str(ROOT / "data" / "live.db")
 
 
-def open_live(merge_mode: str):
+def open_live(merge_mode: str, planner: bool = False):
     cfg = load_config(ROOT / "config.yaml")
     cfg.router.merge_mode = merge_mode
+    cfg.planner.enabled = planner
     deps, project_id = open_demo(cfg, db_path=DB)
     token = get_github_token(cfg.github)  # a SecretStr; never printed
     deps.implementer = Implementer(cfg)
@@ -46,15 +47,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--key", default="clean", help="seed ticket key (default: clean)")
     parser.add_argument("--merge-mode", default="manual", choices=["manual", "risk_based", "auto"])
+    parser.add_argument(
+        "--planner", action="store_true", help="write and gate on plan.md (planner.enabled)"
+    )
     parser.add_argument("--answer", nargs=2, metavar=("REQUEST_ID", "ANSWER"))
     args = parser.parse_args()
-    deps, project_id = open_live(args.merge_mode)
+    deps, project_id = open_live(args.merge_mode, args.planner)
     if args.answer:
         answer_request(deps, int(args.answer[0]), args.answer[1])
         return
     seed = next(s for s in load_seed_tickets() if s["key"] == args.key)
     ticket_id = db.create_ticket(deps.conn, project_id, seed["title"], seed["body"])
-    state = run_ticket(deps, ticket_id)
+    # without the planner there is no plan to accept, so the gate is opened up front
+    facts = {} if args.planner else {"plan_accepted": True}
+    state = run_ticket(deps, ticket_id, facts=facts)
     print(f"ticket {ticket_id}: {'PAUSED' if is_paused(state) else state.get('status')}")
     print("PR:", state.get("pr_url"), "| outcome:", state.get("outcome"))
     show_decisions(deps)
