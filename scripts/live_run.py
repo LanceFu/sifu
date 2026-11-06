@@ -28,11 +28,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DB = str(ROOT / "data" / "live.db")
 
 
-def open_live(merge_mode: str, planner: bool = False):
+def open_live(merge_mode: str, planner: bool = False, db_path: str = DB):
     cfg = load_config(ROOT / "config.yaml")
     cfg.router.merge_mode = merge_mode
     cfg.planner.enabled = planner
-    deps, project_id = open_demo(cfg, db_path=DB)
+    deps, project_id = open_demo(cfg, db_path=db_path)
     token = get_github_token(cfg.github)  # a SecretStr; never printed
     deps.implementer = Implementer(cfg)
     deps.verifier = Verifier(cfg)
@@ -50,9 +50,10 @@ def main() -> None:
     parser.add_argument(
         "--planner", action="store_true", help="write and gate on plan.md (planner.enabled)"
     )
+    parser.add_argument("--db", default=DB, help="database to use (default: data/live.db)")
     parser.add_argument("--answer", nargs=2, metavar=("REQUEST_ID", "ANSWER"))
     args = parser.parse_args()
-    deps, project_id = open_live(args.merge_mode, args.planner)
+    deps, project_id = open_live(args.merge_mode, args.planner, args.db)
     if args.answer:
         answer_request(deps, int(args.answer[0]), args.answer[1])
         return
