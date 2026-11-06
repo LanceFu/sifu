@@ -155,3 +155,21 @@ When the verify loop gives up (`verify_cap` or `verify_no_progress`) and GitHub 
 pushes the branch and opens a **draft** pull request titled `[Draft] ...` with a comment listing the
 unresolved findings, so a human can pick the work up on GitHub. The ticket stays in Needs Human. If
 the push or draft PR fails, the error is logged and the ticket still waits for a human.
+
+## Critic pass
+
+With `critic.enabled: true`, once every deterministic check has passed, three narrow critics (edge
+cases, contract against the acceptance criteria, security) read the lines the change added. They run
+in parallel on `models.code_reviewer`, a different family from the author, each with its own persona,
+rubric and few-shot examples (`prompts/critic_*`). A critic can add findings but never clear one:
+
+- Every finding must cite a line the change added and give a concrete failing scenario. Code drops
+  the rest (`critic_result` events list kept and dropped findings with the reason).
+- Blockers go back to the implementer through the same loop as the checks, within
+  `max_build_iterations`; the same blocker twice stops with `critic_no_progress`, the cap with
+  `critic_cap`, and either opens a draft PR.
+- Major and minor findings are posted as one PR comment and do not block the merge decision.
+- A critic that gives no valid answer adds nothing and is named in that comment.
+
+`scripts/critic_spike.py` runs the critics on a worktree with the real model and prints what was kept
+and dropped.

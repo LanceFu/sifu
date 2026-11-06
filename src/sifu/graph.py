@@ -13,6 +13,7 @@ a real implementer) and only run when the gate facts allow it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -29,6 +30,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from sifu import checks, db, router
+from sifu import critic as critic_pass
 from sifu.assessors import run_assessor
 from sifu.config import Config
 from sifu.context import ProductContext
@@ -58,6 +60,7 @@ from sifu.synthesizer import (
     write_artifact,
 )
 from sifu.tools import ToolGateway, build_server
+from sifu.verify import added_lines
 
 CONFLICT_CATEGORIES = {"requirement_conflict", "constraint_violation", "contradiction"}
 
@@ -104,6 +107,8 @@ class TicketState(TypedDict, total=False):
     pr_url: str
     head_sha: str
     findings: list[dict[str, Any]]
+    critic_notes: list[dict[str, Any]]
+    critic_degraded: list[str]
     fingerprint: str
     build_round: int
     session_id: str
@@ -688,13 +693,110 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
             "build_round": rounds,
         }
 
+    def critic_on(state: TicketState) -> bool:
+        worktree = state.get("worktree")
+        return bool(cfg.critic.enabled and worktree and Path(worktree).is_dir())
+
     def after_verify(state: TicketState) -> str:
         can_publish = deps.github is not None and deps.publisher is not None and state.get("branch")
         if state.get("status") == "needs_human":
             return "draft_pr" if can_publish else END
         if state.get("findings"):
             return "build"
+        if critic_on(state):
+            return "critic"
         return "open_pr" if can_publish else "done"
+
+    def critic(state: TicketState) -> TicketState:
+        """LLM critics read the diff once every deterministic check has passed."""
+        tid = state["ticket_id"]
+        spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
+        index = critic_pass.added_index(added_lines(Path(state["worktree"])))
+        steps = [e for e in db.list_events(deps.conn, tid) if e["kind"] == "verify_result"]
+        names = [s["name"] for s in json.loads(steps[-1]["payload"])["steps"]] if steps else []
+        model = cfg.models.code_reviewer
+
+        def one(name: str):
+            deps.check_budget(tid)
+            report, outcome = critic_pass.run_critic(
+                name,
+                spec_text=spec_text,
+                index=index,
+                checks=", ".join(names) or "none",
+                llm=deps.llm,
+                model=model,
+                max_diff_chars=cfg.critic.max_diff_chars,
+                min_scenario_words=cfg.critic.min_scenario_words,
+                prompts_dir=prompts_dir,
+            )
+            deps.log_run(tid, f"critic:{name}", model, outcome)
+            return report
+
+        with ThreadPoolExecutor(max_workers=len(cfg.critic.names)) as pool:
+            reports = list(pool.map(one, cfg.critic.names))
+        kept = [f for r in reports for f in r.kept]
+        dropped = [f for r in reports for f in r.dropped]
+        degraded = [r.critic for r in reports if r.degraded]
+        deps.log(
+            tid,
+            "critic_result",
+            "critic",
+            {"kept": kept, "dropped": dropped, "degraded": degraded},
+        )
+        blockers = critic_pass.to_implementer_findings(kept)
+        notes = [f for f in kept if f["severity"] != "blocker"]
+        if not blockers:
+            return {"findings": [], "critic_notes": notes, "critic_degraded": degraded}
+        rounds = state.get("build_round", 0) + 1
+        keys = sorted((b["source"], b["file"], b["rule"]) for b in blockers)
+        fingerprint = hashlib.sha256(json.dumps(keys).encode()).hexdigest()[:16]
+        reason = ""
+        if rounds >= cfg.router.max_build_iterations:
+            reason = "critic_cap"
+        elif fingerprint == state.get("fingerprint"):
+            reason = "critic_no_progress"
+        if reason:
+            deps.log(tid, reason, "supervisor", {"rounds": rounds})
+            deps.move(tid, TicketStatus.NEEDS_HUMAN)
+            return {
+                "status": "needs_human",
+                "outcome": reason,
+                "build_round": rounds,
+                "findings": blockers,
+                "critic_notes": notes,
+                "critic_degraded": degraded,
+            }
+        return {
+            "status": "test",
+            "findings": blockers,
+            "fingerprint": fingerprint,
+            "build_round": rounds,
+            "critic_notes": notes,
+            "critic_degraded": degraded,
+        }
+
+    def after_critic(state: TicketState) -> str:
+        can_publish = deps.github is not None and deps.publisher is not None and state.get("branch")
+        if state.get("status") == "needs_human":
+            return "draft_pr" if can_publish else END
+        if state.get("findings"):
+            return "build"
+        return "open_pr" if can_publish else "done"
+
+    def post_critic_notes(state: TicketState, number: int) -> None:
+        notes = state.get("critic_notes", [])
+        if not notes and not state.get("critic_degraded"):
+            return
+        comment = critic_pass.render_pr_comment(notes, state.get("critic_degraded", []))
+        try:
+            deps.github.comment(number, comment)
+        except GitHubError as exc:
+            deps.log(
+                state["ticket_id"],
+                "error",
+                "supervisor",
+                {"type": "GitHubError", "message": str(exc)},
+            )
 
     # ---- pull request and merge --------------------------------------------------------------
     def fail(tid: int, reason: str, exc: Exception) -> TicketState:
@@ -720,6 +822,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         except (GitHubError, PublishError) as exc:
             return fail(tid, "pr_failed", exc)
         deps.log(tid, "pr_opened", "supervisor", {"number": number, "url": url, "sha": sha})
+        post_critic_notes(state, number)
         return {"pr_number": number, "pr_url": url, "head_sha": sha}
 
     def draft_pr(state: TicketState) -> TicketState:
@@ -749,6 +852,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
             deps.log(tid, "error", "supervisor", {"type": type(exc).__name__, "message": str(exc)})
             return {}
         deps.log(tid, "draft_pr_opened", "supervisor", {"number": number, "url": url, "sha": sha})
+        post_critic_notes(state, number)
         return {"pr_number": number, "pr_url": url, "head_sha": sha}
 
     def after_pr(state: TicketState) -> str:
@@ -894,6 +998,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         "verify": verify,
         "open_pr": open_pr,
         "draft_pr": draft_pr,
+        "critic": critic,
         "merge_decision": merge_decision,
         "merge": merge,
         "done": done,
@@ -921,9 +1026,12 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
     graph.add_conditional_edges("plan_gate", after_gate, ["build", END])
     graph.add_conditional_edges("build", after_build, ["verify", END])
     graph.add_conditional_edges(
-        "verify", after_verify, ["build", "done", "open_pr", "draft_pr", END]
+        "verify", after_verify, ["build", "critic", "done", "open_pr", "draft_pr", END]
     )
     graph.add_edge("draft_pr", END)
+    graph.add_conditional_edges(
+        "critic", after_critic, ["build", "open_pr", "draft_pr", "done", END]
+    )
     graph.add_conditional_edges("open_pr", after_pr, ["merge_decision", END])
     graph.add_conditional_edges(
         "merge_decision", after_merge_decision, ["merge", "escalate_decision"]

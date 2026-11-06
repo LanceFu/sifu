@@ -142,3 +142,20 @@ class AssessorOutput(BaseModel):
     tier: RiskTier
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str
+
+
+class LLMCriticFinding(BaseModel):
+    """One problem a critic claims to see in the diff. Code checks the citation before use."""
+
+    severity: Literal["blocker", "major", "minor"]
+    category: str
+    file: str
+    line: int
+    message: str
+    scenario: str  # a concrete input or sequence that makes the code fail
+
+
+class CriticOutput(BaseModel):
+    """The JSON a critic model must return."""
+
+    findings: list[LLMCriticFinding] = Field(default_factory=list)

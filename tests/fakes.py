@@ -17,6 +17,8 @@ SPEC = json.dumps(
 )
 
 
+CRITIC_CLEAN = json.dumps({"findings": []})
+
 PLAN = json.dumps(
     {
         "summary": "Reject blank names when a Trip is saved.",
@@ -32,7 +34,11 @@ class FakeLLM:
     """Replies by reviewer persona. A value may be a string or a list used one reply at a time."""
 
     def __init__(self, replies: dict[str, str | list[str]] | None = None) -> None:
+        # the critic personas are checked first: their examples mention TripPlannerCore
         self.replies = {
+            "Edge Case Critic": CRITIC_CLEAN,
+            "Contract Critic": CRITIC_CLEAN,
+            "Security Critic": CRITIC_CLEAN,
             "Ambiguity": CLEAN,
             "Scope": CLEAN,
             "Policy": CLEAN,

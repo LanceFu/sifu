@@ -1,0 +1,23 @@
+[
+  {
+    "change": "### Sources/TripPlannerCore/DayPlan.swift\n41: public mutating func add(_ stop: Stop) throws {\n42:     if stops.count >= 10 { throw DayPlanError.limitReached }\n43:     stops.append(stop)\n44: }",
+    "output": {
+      "findings": [
+        {
+          "severity": "major",
+          "category": "wrong_error",
+          "file": "Sources/TripPlannerCore/DayPlan.swift",
+          "line": 42,
+          "message": "The criterion requires a tooManyStops error, but the code throws limitReached.",
+          "scenario": "A caller adds an 11th Stop and checks for DayPlanError.tooManyStops as the spec says; the catch never matches because limitReached is thrown."
+        }
+      ]
+    }
+  },
+  {
+    "change": "### Sources/TripPlannerCore/DayPlan.swift\n42:     if stops.count >= 10 { throw DayPlanError.tooManyStops }",
+    "output": {
+      "findings": []
+    }
+  }
+]

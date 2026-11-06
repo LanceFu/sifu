@@ -38,6 +38,12 @@ planner:
   excerpt_chars: 3000
   total_chars: 15000
 
+critic:                     # LLM review of the diff after verify passes (model: models.code_reviewer)
+  enabled: false            # true: edge-case, contract and security critics; blockers go back to Build
+  max_diff_chars: 24000
+  min_scenario_words: 6     # a finding needs a concrete failing scenario at least this long
+  names: [edge_cases, contract, security]
+
 verify:                     # run by Sifu itself after every implementer run, cheapest first
   timeout_seconds: 900
   max_findings: 20          # findings sent back to the implementer per round

@@ -62,6 +62,15 @@ class VerifyStep(BaseModel):
     parser: Literal["compiler", "swiftlint_json", "generic"] = "generic"
 
 
+class CriticConfig(BaseModel):
+    """The LLM review pass that runs after the deterministic checks pass."""
+
+    enabled: bool = False
+    max_diff_chars: int = 24_000
+    min_scenario_words: int = 6
+    names: list[str] = ["edge_cases", "contract", "security"]
+
+
 class VerifyConfig(BaseModel):
     """The deterministic review stage: tools run in order, cheapest first, stopping at the first
     failing step. An empty ``steps`` list turns the stage into a stub."""
@@ -116,6 +125,7 @@ class Config(BaseModel):
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     models: ModelsConfig
     implementer: ImplementerConfig = Field(default_factory=ImplementerConfig)
+    critic: CriticConfig = CriticConfig()
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
