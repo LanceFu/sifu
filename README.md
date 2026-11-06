@@ -109,6 +109,12 @@ directly. Each ticket also stops after `router.max_tokens_per_ticket` model toke
 `config.yaml`, a minimal environment (the GitHub token is never passed) and a check of the changed files against the
 protected paths. Try it once with `uv run python scripts/implementer_spike.py --repo <tripplanner-ios>`.
 
+Plan step (off by default, `planner.enabled` in `config.yaml`): after the spec is accepted, the author model reads the
+repository's file list and excerpts of the spec's files (no tools) and writes `plan.md`. Code then checks it: a
+protected file, a file outside the spec's `affected_paths`, or an unusable plan sends it to a human (decision type
+`accept_plan`); otherwise the router accepts it and Build may start. Build never starts without an accepted plan.
+The implementer receives the spec and the plan together.
+
 Review stage (verify): after Build, Sifu runs the checks itself (`verify.steps` in `config.yaml`: `swift build`
 with warnings as errors, SwiftLint, `swift test`), cheapest first, stopping at the first failing step. Two free diff
 checks run before them: no added `swiftlint:disable`, and no changed file outside the spec's `affected_paths`

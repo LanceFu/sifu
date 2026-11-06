@@ -17,6 +17,17 @@ SPEC = json.dumps(
 )
 
 
+PLAN = json.dumps(
+    {
+        "summary": "Reject blank names when a Trip is saved.",
+        "steps": ["Trim the name", "Throw nameBlank when empty", "Add tests"],
+        "files_to_change": ["Sources/Trip.swift", "Tests/TripTests.swift"],
+        "tests_to_add": ["testBlankNameIsRejected"],
+        "risks": [],
+    }
+)
+
+
 class FakeLLM:
     """Replies by reviewer persona. A value may be a string or a list used one reply at a time."""
 
@@ -27,6 +38,7 @@ class FakeLLM:
             "Policy": CLEAN,
             "Spec Writer": SPEC,
             "Risk Assessor": RISK_AUTO,
+            "Planner": PLAN,
         }
         self.replies.update(replies or {})
         self.calls: list[dict] = []

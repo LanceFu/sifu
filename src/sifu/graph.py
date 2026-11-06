@@ -42,6 +42,7 @@ from sifu.models import (
     Spec,
     TicketStatus,
 )
+from sifu.planner import draft_plan, outside_spec, render_plan_md, repo_context
 from sifu.reviewers import PROMPTS_DIR, REVIEWER_NAMES, run_reviewer
 from sifu.synthesizer import (
     Outcome,
@@ -90,6 +91,8 @@ class TicketState(TypedDict, total=False):
     request_id: int
     answer: str
     status: str
+    stage: str
+    plan_path: str
     findings: list[dict[str, Any]]
     fingerprint: str
     build_round: int
@@ -368,10 +371,85 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
                 "assessor_tiers": [int(t) for t in result.assessor_tiers],
             },
         )
-        return {"tier": int(result.final_tier), "decision_id": decision_id}
+        return {"tier": int(result.final_tier), "decision_id": decision_id, "stage": "spec"}
 
     def after_route(state: TicketState) -> str:
         return "escalate_decision" if state["tier"] >= RiskTier.HUMAN else "accept"
+
+    def needs_plan(state: TicketState) -> bool:
+        facts = state.get("facts", {})
+        return cfg.planner.enabled and not facts.get("plan_accepted", False)
+
+    def after_accept(state: TicketState) -> str:
+        return "plan" if needs_plan(state) else "plan_gate"
+
+    def plan(state: TicketState) -> TicketState:
+        """Write plan.md with the author model, then let the router decide who accepts it."""
+        tid = state["ticket_id"]
+        spec = Spec.model_validate(state["spec"])
+        spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
+        listing, excerpts = repo_context(
+            Path(cfg.workspace.product_repo_path).expanduser(), spec.affected_paths, cfg.planner
+        )
+        persona = (prompts_dir / "planner" / "persona.md").read_text(encoding="utf-8")
+        deps.check_budget(tid)
+        model = cfg.models.author
+        outcome = draft_plan(
+            deps.llm,
+            model=model,
+            spec=spec,
+            spec_text=spec_text,
+            conventions=deps.ctx.conventions_text,
+            listing=listing,
+            excerpts=excerpts,
+            persona=persona,
+        )
+        deps.log_run(tid, "planner", model, outcome)
+        the_plan = outcome.value
+        path = write_artifact(deps.artifacts_dir, tid, "plan.md", render_plan_md(tid, the_plan))
+        deps.log(tid, "agent_output", "planner", {"plan": the_plan.model_dump(), "path": str(path)})
+        outside = outside_spec(the_plan, spec, cfg)
+        context = DecisionContext(
+            decision_type=DecisionType.ACCEPT_PLAN,
+            touched_paths=the_plan.files_to_change,
+            outside_spec_paths=outside,
+        )
+        result = router.decide(context, [], cfg.router)
+        rules = list(result.rules_fired)
+        tier = result.final_tier
+        if the_plan.degraded or not the_plan.files_to_change:  # code distrusts an empty plan
+            rules.append("plan_unusable")
+            tier = RiskTier.HUMAN
+        decision_id = deps.tool(
+            "supervisor",
+            "record_decision",
+            log_for=tid,
+            ticket_id=tid,
+            decision_type=DecisionType.ACCEPT_PLAN.value,
+            final_tier=int(tier),
+            floor_tier=int(result.floor_tier),
+            rules_fired=rules,
+            assessments=[],
+        )
+        deps.log(
+            tid,
+            "router_decision",
+            "router",
+            {"decision_id": decision_id, "tier": int(tier), "rules": rules, "stage": "plan"},
+        )
+        update: TicketState = {
+            "tier": int(tier),
+            "decision_id": decision_id,
+            "stage": "plan",
+            "plan_path": str(path),
+        }
+        if tier < RiskTier.HUMAN:
+            deps.log(tid, "plan_accepted", "router", {"decision_id": decision_id})
+            update["facts"] = {**state.get("facts", {}), "plan_accepted": True}
+        return update
+
+    def after_plan(state: TicketState) -> str:
+        return "escalate_decision" if state["tier"] >= RiskTier.HUMAN else "plan_gate"
 
     def accept(state: TicketState) -> TicketState:
         tid = state["ticket_id"]
@@ -396,6 +474,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
     def escalate_decision(state: TicketState) -> TicketState:
         tid = state["ticket_id"]
         deps.move(tid, TicketStatus.NEEDS_HUMAN)
+        read_path = state["plan_path"] if state.get("stage") == "plan" else state["spec_path"]
         with deps.lock:
             row = deps.conn.execute(
                 "SELECT rules_fired FROM decisions WHERE id = ?", (state["decision_id"],)
@@ -403,8 +482,9 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
             request_id = db.open_human_request(
                 deps.conn,
                 tid,
-                "The router needs a person to approve this spec "
-                f"(rules fired: {row['rules_fired']}). Read {state['spec_path']}.",
+                f"The router needs a person to approve this {state.get('stage', 'spec')} "
+                f"(rules fired: {row['rules_fired']}). "
+                f"Read {read_path}.",
                 ["approve", "close"],
                 state["decision_id"],
             )
@@ -441,8 +521,13 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         with deps.lock:
             db.resolve_decision(deps.conn, state["decision_id"], "human_approved", "human")
         deps.move(tid, TicketStatus.SPEC)
-        deps.log(tid, "spec_accepted", "human", {"decision_id": state["decision_id"]})
-        return {"facts": {**state.get("facts", {}), "spec_accepted": True}, "status": "spec"}
+        stage = state.get("stage", "spec")
+        deps.log(tid, f"{stage}_accepted", "human", {"decision_id": state["decision_id"]})
+        fact = "plan_accepted" if stage == "plan" else "spec_accepted"
+        return {"facts": {**state.get("facts", {}), fact: True}, "status": "spec"}
+
+    def after_approve(state: TicketState) -> str:
+        return "plan" if state.get("stage", "spec") == "spec" and needs_plan(state) else "plan_gate"
 
     def revise(state: TicketState) -> TicketState:
         tid = state["ticket_id"]
@@ -451,7 +536,8 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         if state["wait_kind"] == "decision":
             with deps.lock:
                 db.resolve_decision(deps.conn, state["decision_id"], "human_rejected", "human")
-            lesson = f"A human rejected the spec for '{state['title']}': {feedback}"
+            stage = state.get("stage", "spec")
+            lesson = f"A human rejected the {stage} for '{state['title']}': {feedback}"
             if propose_lesson(deps.approved_conventions, deps.proposed_conventions, lesson, tid):
                 deps.log(tid, "lesson_proposed", "human", {"lesson": lesson})
         with deps.lock:
@@ -496,6 +582,8 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
             deps.log(tid, "stub_ran", "build", {})
             return {"facts": {**facts, "has_diff": True}, "status": "build"}
         spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
+        if state.get("plan_path"):
+            spec_text += "\n\n" + Path(state["plan_path"]).read_text(encoding="utf-8")
         feedback = state.get("findings") or []
         if feedback:
             result = deps.implementer(
@@ -579,6 +667,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         "synthesize": synthesize,
         "route": route,
         "accept": accept,
+        "plan": plan,
         "escalate_questions": escalate_questions,
         "escalate_decision": escalate_decision,
         "await_human": await_human,
@@ -601,13 +690,14 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
     graph.add_edge(parallel, "synthesize")
     graph.add_conditional_edges("synthesize", after_synthesis, ["route", "escalate_questions"])
     graph.add_conditional_edges("route", after_route, ["escalate_decision", "accept"])
-    graph.add_edge("accept", "plan_gate")
+    graph.add_conditional_edges("accept", after_accept, ["plan", "plan_gate"])
+    graph.add_conditional_edges("plan", after_plan, ["plan_gate", "escalate_decision"])
     graph.add_edge("escalate_questions", "await_human")
     graph.add_edge("escalate_decision", "await_human")
     graph.add_conditional_edges(
         "await_human", after_answer, ["close_ticket", "approve_decision", "revise"]
     )
-    graph.add_edge("approve_decision", "plan_gate")
+    graph.add_conditional_edges("approve_decision", after_approve, ["plan", "plan_gate"])
     graph.add_conditional_edges("revise", after_revise, ["load", END])
     graph.add_edge("close_ticket", END)
     graph.add_conditional_edges("plan_gate", after_gate, ["build", END])

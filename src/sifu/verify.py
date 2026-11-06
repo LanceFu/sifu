@@ -168,7 +168,7 @@ def added_lines(worktree: Path) -> list[tuple[str, int, str]]:
     return rows
 
 
-def _in_scope(name: str, allowed: list[str]) -> bool:
+def in_scope(name: str, allowed: list[str]) -> bool:
     for entry in allowed:
         base = entry.rstrip("/")
         if name == base or name.startswith(base + "/"):
@@ -195,7 +195,7 @@ def diff_findings(
     if affected_paths:
         allowed = [*affected_paths, *extra_allowed]
         for name in changed_files(worktree):
-            if not _in_scope(name, allowed):
+            if not in_scope(name, allowed):
                 found.append(
                     Finding(
                         "diff",

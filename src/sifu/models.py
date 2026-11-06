@@ -67,6 +67,7 @@ class DecisionContext(BaseModel):
     iteration: int = 0
     conflicts_with_requirements: bool = False
     ci_green: bool | None = None  # only meaningful for MERGE
+    outside_spec_paths: list[str] = Field(default_factory=list)  # only meaningful for ACCEPT_PLAN
 
 
 class DecisionResult(BaseModel):
@@ -112,6 +113,17 @@ class Spec(BaseModel):
     requirement_refs: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
     affected_paths: list[str] = Field(default_factory=list)
+
+
+class Plan(BaseModel):
+    """The accepted shape of plan.md: how the implementer should make the change."""
+
+    summary: str
+    steps: list[str] = Field(default_factory=list)
+    files_to_change: list[str] = Field(default_factory=list)
+    tests_to_add: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    degraded: bool = False  # True when the deterministic fallback wrote it
 
 
 class ClarifyingQuestion(BaseModel):

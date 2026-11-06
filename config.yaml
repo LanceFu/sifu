@@ -32,6 +32,12 @@ implementer:
     - "Bash(git add:*)"
     - "Bash(git commit:*)"
 
+planner:
+  enabled: false            # true: write plan.md after the spec is accepted and gate Build on it
+  listing_cap: 150
+  excerpt_chars: 3000
+  total_chars: 15000
+
 verify:                     # run by Sifu itself after every implementer run, cheapest first
   timeout_seconds: 900
   max_findings: 20          # findings sent back to the implementer per round

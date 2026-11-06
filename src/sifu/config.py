@@ -72,6 +72,15 @@ class VerifyConfig(BaseModel):
     steps: list[VerifyStep] = Field(default_factory=list)
 
 
+class PlannerConfig(BaseModel):
+    """The Plan step between an accepted spec and Build. Off by default."""
+
+    enabled: bool = False
+    listing_cap: int = 150  # file names shown to the planner
+    excerpt_chars: int = 3000  # per file
+    total_chars: int = 15000  # all excerpts together
+
+
 class RouterConfig(BaseModel):
     merge_mode: Literal["manual", "risk_based", "auto"] = "risk_based"
     max_build_iterations: int = 3
@@ -101,6 +110,7 @@ class Config(BaseModel):
     models: ModelsConfig
     implementer: ImplementerConfig = Field(default_factory=ImplementerConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
+    planner: PlannerConfig = Field(default_factory=PlannerConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
     github: GithubConfig
     workspace: WorkspaceConfig
