@@ -105,12 +105,19 @@ def main() -> None:
     show_decisions(deps)
 
     if args.scenario == "once":
+        lint_sent_back = any(
+            f["source"] == "swiftlint"
+            for e in db.list_events(deps.conn, ticket_id)
+            if e["kind"] == "verify_result"
+            for f in json.loads(e["payload"])["findings"]
+        )
         report(
             [
-                ("verify failed in round 1 and passed in round 2", oks[:2] == [False, True]),
+                ("a SwiftLint finding was sent back to the implementer", lint_sent_back),
+                ("a later verify round passed", bool(oks) and oks[-1] and not all(oks)),
                 (
-                    "the implementer ran twice (the second time with the findings)",
-                    seen.count("implementer_result") == 2,
+                    "the implementer ran again after a failure",
+                    seen.count("implementer_result") >= 2,
                 ),
                 (
                     "a normal (not draft) PR was opened",
