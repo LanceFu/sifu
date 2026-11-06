@@ -32,6 +32,22 @@ implementer:
     - "Bash(git add:*)"
     - "Bash(git commit:*)"
 
+verify:                     # run by Sifu itself after every implementer run, cheapest first
+  timeout_seconds: 900
+  max_findings: 20          # findings sent back to the implementer per round
+  extra_allowed_paths:      # files the implementer may add even when the spec does not list them
+    - "Tests/"
+  steps:
+    - name: build
+      command: ["swift", "build", "-Xswiftc", "-warnings-as-errors"]
+      parser: compiler
+    - name: swiftlint
+      command: ["swiftlint", "lint", "--strict", "--reporter", "json"]
+      parser: swiftlint_json
+    - name: test
+      command: ["swift", "test"]
+      parser: compiler
+
 router:
   merge_mode: risk_based    # manual | risk_based | auto (floor rules apply in every mode)
   max_build_iterations: 3
@@ -40,6 +56,7 @@ router:
   protected_paths:          # a trailing slash means "everything under this directory"
     - ".github/"
     - ".claude/"
+    - ".swiftlint.yml"
     - "conventions.md"
     - "docs/glossary.yaml"
     - "Package.swift"

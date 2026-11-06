@@ -169,3 +169,27 @@ def test_tagged_runs_get_separate_worktrees_and_branches(cfg, repo, tmp_path):
     a, b = first(12, "s", "c"), second(12, "s", "c")
     assert a.branch == "sifu/ticket-12-cloud" and b.branch == "sifu/ticket-12-ollama"
     assert a.worktree != b.worktree
+
+
+def test_follow_up_run_resumes_the_session_with_a_findings_prompt(cfg, repo, tmp_path):
+    runner = make_runner(reply())
+    impl = implementer(cfg, repo, tmp_path, runner)
+    finding = {
+        "source": "swiftlint",
+        "file": "A.swift",
+        "line": 4,
+        "rule": "r",
+        "message": "Too long",
+    }
+    impl(13, "spec", "conv", feedback=[finding], session_id="abc")
+    cmd = runner.seen["cmd"]
+    assert cmd[cmd.index("--resume") + 1] == "abc"
+    prompt = cmd[2]
+    assert "A.swift:4" in prompt and "Too long" in prompt and "<findings>" in prompt
+    assert "spec" not in prompt.split("<findings>")[0].split("Sifu ran")[0]  # not the first prompt
+
+
+def test_first_run_never_resumes(cfg, repo, tmp_path):
+    runner = make_runner(reply())
+    implementer(cfg, repo, tmp_path, runner)(14, "spec", "conv", session_id="abc")
+    assert "--resume" not in runner.seen["cmd"]

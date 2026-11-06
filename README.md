@@ -109,6 +109,13 @@ directly. Each ticket also stops after `router.max_tokens_per_ticket` model toke
 `config.yaml`, a minimal environment (the GitHub token is never passed) and a check of the changed files against the
 protected paths. Try it once with `uv run python scripts/implementer_spike.py --repo <tripplanner-ios>`.
 
+Review stage (verify): after Build, Sifu runs the checks itself (`verify.steps` in `config.yaml`: `swift build`
+with warnings as errors, SwiftLint, `swift test`), cheapest first, stopping at the first failing step. Two free diff
+checks run before them: no added `swiftlint:disable`, and no changed file outside the spec's `affected_paths`
+(plus `verify.extra_allowed_paths`). Findings go back to the implementer by resuming the same `claude -p` session,
+up to `router.max_build_iterations` rounds. The loop stops early if two rounds give the same findings, and the ticket
+then moves to Needs Human. Try the checks on a worktree with `scripts/verify_spike.py --worktree <path>`.
+
 Switching the implementer: set `implementer.backend` in `config.yaml` to `cloud` (Claude Code with your
 Anthropic login) or `ollama` (Claude Code pointed at the local Ollama server, using `implementer.ollama_model`).
 For one run, use `SIFU_IMPLEMENTER_BACKEND=ollama` or `--backend ollama` on the spike script. `--compare` runs the

@@ -54,6 +54,24 @@ class ImplementerConfig(BaseModel):
         return self.model_copy(update={"backend": backend})
 
 
+class VerifyStep(BaseModel):
+    """One command the orchestrator runs itself after the implementer finishes."""
+
+    name: str
+    command: list[str]
+    parser: Literal["compiler", "swiftlint_json", "generic"] = "generic"
+
+
+class VerifyConfig(BaseModel):
+    """The deterministic review stage: tools run in order, cheapest first, stopping at the first
+    failing step. An empty ``steps`` list turns the stage into a stub."""
+
+    timeout_seconds: int = 900
+    max_findings: int = 20
+    extra_allowed_paths: list[str] = Field(default_factory=lambda: ["Tests/"])
+    steps: list[VerifyStep] = Field(default_factory=list)
+
+
 class RouterConfig(BaseModel):
     merge_mode: Literal["manual", "risk_based", "auto"] = "risk_based"
     max_build_iterations: int = 3
@@ -82,6 +100,7 @@ class Config(BaseModel):
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     models: ModelsConfig
     implementer: ImplementerConfig = Field(default_factory=ImplementerConfig)
+    verify: VerifyConfig = Field(default_factory=VerifyConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
     github: GithubConfig
     workspace: WorkspaceConfig

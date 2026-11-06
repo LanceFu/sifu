@@ -17,7 +17,7 @@ import sqlite3
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
@@ -90,6 +90,10 @@ class TicketState(TypedDict, total=False):
     request_id: int
     answer: str
     status: str
+    findings: list[dict[str, Any]]
+    fingerprint: str
+    build_round: int
+    session_id: str
 
 
 @dataclass
@@ -102,7 +106,8 @@ class Deps:
     ctx: ProductContext
     artifacts_dir: Path
     checkpointer: Any = None
-    implementer: Callable[[int, str, str], Any] | None = None
+    implementer: Callable[..., Any] | None = None
+    verifier: Callable[[int, dict[str, Any]], Any] | None = None
     lock: threading.RLock = field(default_factory=threading.RLock)
     gateway: ToolGateway | None = None
 
@@ -491,7 +496,17 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
             deps.log(tid, "stub_ran", "build", {})
             return {"facts": {**facts, "has_diff": True}, "status": "build"}
         spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
-        result = deps.implementer(tid, spec_text, deps.ctx.conventions_text)
+        feedback = state.get("findings") or []
+        if feedback:
+            result = deps.implementer(
+                tid,
+                spec_text,
+                deps.ctx.conventions_text,
+                feedback=feedback,
+                session_id=state.get("session_id"),
+            )
+        else:
+            result = deps.implementer(tid, spec_text, deps.ctx.conventions_text)
         deps.log(tid, "implementer_result", "implementer", _result_payload(result))
         with deps.lock:
             db.record_run(
@@ -507,16 +522,51 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         if not result.ok:
             deps.move(tid, TicketStatus.FAILED)
             return {"status": "failed", "outcome": "implementer_failed"}
-        return {"facts": {**facts, "has_diff": bool(result.changed_files)}, "status": "build"}
+        return {
+            "facts": {**facts, "has_diff": bool(result.changed_files)},
+            "status": "build",
+            "session_id": result.session_id or state.get("session_id") or "",
+        }
 
     def after_build(state: TicketState) -> str:
-        return END if state.get("status") == "failed" else "test"
+        return END if state.get("status") == "failed" else "verify"
 
-    def test(state: TicketState) -> TicketState:  # stub
-        deps.move(state["ticket_id"], TicketStatus.TEST, state.get("facts"))
-        deps.log(state["ticket_id"], "stub_ran", "test", {})
-        facts = {**state.get("facts", {}), "ci_green": True, "review_passed": True}
-        return {"facts": facts, "status": "test"}
+    def verify(state: TicketState) -> TicketState:
+        """Run the deterministic checks. A failure goes back to build until the caps are hit."""
+        tid = state["ticket_id"]
+        deps.move(tid, TicketStatus.TEST, state.get("facts"))
+        if deps.verifier is None:  # stub until a verifier is configured
+            deps.log(tid, "stub_ran", "test", {})
+            facts = {**state.get("facts", {}), "ci_green": True, "review_passed": True}
+            return {"facts": facts, "status": "test", "findings": []}
+        result = deps.verifier(tid, state.get("spec", {}))
+        limit = cfg.verify.max_findings
+        deps.log(tid, "verify_result", "verify", result.to_payload(limit))
+        if result.ok:
+            facts = {**state.get("facts", {}), "ci_green": True, "review_passed": True}
+            return {"facts": facts, "status": "test", "findings": []}
+        rounds = state.get("build_round", 0) + 1
+        reason = ""
+        if rounds >= cfg.router.max_build_iterations:
+            reason = "verify_cap"
+        elif result.fingerprint == state.get("fingerprint"):
+            reason = "verify_no_progress"
+        if reason:
+            deps.log(tid, reason, "supervisor", {"rounds": rounds})
+            deps.move(tid, TicketStatus.NEEDS_HUMAN)
+            return {"status": "needs_human", "outcome": reason, "build_round": rounds}
+        findings = [asdict(f) for f in result.findings[:limit]]
+        return {
+            "status": "test",
+            "findings": findings,
+            "fingerprint": result.fingerprint,
+            "build_round": rounds,
+        }
+
+    def after_verify(state: TicketState) -> str:
+        if state.get("status") == "needs_human":
+            return END
+        return "build" if state.get("findings") else "done"
 
     def done(state: TicketState) -> TicketState:  # stub
         deps.move(state["ticket_id"], TicketStatus.DONE, state.get("facts"))
@@ -537,7 +587,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         "close_ticket": close_ticket,
         "plan_gate": plan_gate,
         "build": build,
-        "test": test,
+        "verify": verify,
         "done": done,
     }.items():
         graph.add_node(name, fn)
@@ -561,8 +611,8 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
     graph.add_conditional_edges("revise", after_revise, ["load", END])
     graph.add_edge("close_ticket", END)
     graph.add_conditional_edges("plan_gate", after_gate, ["build", END])
-    graph.add_conditional_edges("build", after_build, ["test", END])
-    graph.add_edge("test", "done")
+    graph.add_conditional_edges("build", after_build, ["verify", END])
+    graph.add_conditional_edges("verify", after_verify, ["build", "done", END])
     graph.add_edge("done", END)
     return graph.compile(checkpointer=deps.checkpointer)
 
