@@ -1,22 +1,22 @@
 [
   {
-    "change": "### Sources/TripPlannerCore/DayPlan.swift\n41: public mutating func add(_ stop: Stop) throws {\n42:     if stops.count >= 10 { throw DayPlanError.limitReached }\n43:     stops.append(stop)\n44: }",
+    "change": "### Sources/Export.swift\n14: public func itineraryText(for stops: [Stop]) -> String {\n15:     stops.sorted { $0.place.name < $1.place.name }\n16:         .map { $0.place.name }\n17:         .joined(separator: \"\\n\")\n18: }",
     "output": {
       "findings": [
         {
-          "severity": "major",
-          "category": "wrong_error",
-          "file": "Sources/TripPlannerCore/DayPlan.swift",
-          "line": 42,
-          "quote": "throw DayPlanError.limitReached",
-          "message": "The criterion requires a tooManyStops error, but the code throws limitReached.",
-          "scenario": "A caller adds an 11th Stop and checks for DayPlanError.tooManyStops as the spec says; the catch never matches because limitReached is thrown."
+          "severity": "blocker",
+          "category": "criterion_not_met",
+          "file": "Sources/Export.swift",
+          "line": 15,
+          "quote": "sorted { $0.place.name < $1.place.name }",
+          "message": "The criterion says the Itinerary lists Stops in the order they were planned, but the code sorts them by name.",
+          "scenario": "A Day Plan has Stops Museum then Bakery; the exported text lists Bakery first, so the Itinerary no longer matches the planned order."
         }
       ]
     }
   },
   {
-    "change": "### Sources/TripPlannerCore/DayPlan.swift\n42:     if stops.count >= 10 { throw DayPlanError.tooManyStops }",
+    "change": "### Sources/Export.swift\n15:     stops.map { $0.place.name }\n16:         .joined(separator: \"\\n\")",
     "output": {
       "findings": []
     }

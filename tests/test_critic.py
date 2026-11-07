@@ -263,3 +263,26 @@ def test_major_and_minor_findings_become_a_pr_comment(conn, cfg, make_deps, make
     notes = [c for c in hub.comments if c.startswith("Sifu critic notes")]
     assert len(notes) == 1 and "**major**" in notes[0] and "**minor**" in notes[0]
     assert len(deps.implementer.calls) == 1  # nothing blocked
+
+
+# ---- the few-shot examples must be self-consistent --------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["edge_cases", "contract", "security"])
+def test_every_example_cites_a_numbered_line_that_holds_its_quote(name):
+    from sifu.critic import load_critic
+
+    _, examples = load_critic(name)
+    for ex in examples:
+        numbered = {}
+        current = ""
+        for row in ex["change"].splitlines():
+            if row.startswith("### "):
+                current = row[4:]
+            elif ": " in row and row.split(": ", 1)[0].isdigit():
+                number, text = row.split(": ", 1)
+                numbered[(current, int(number))] = text
+        for f in ex["output"]["findings"]:
+            text = numbered[(f["file"], f["line"])]
+            assert " ".join(f["quote"].split()) in " ".join(text.split())
+            assert len(f["scenario"].split()) >= 6

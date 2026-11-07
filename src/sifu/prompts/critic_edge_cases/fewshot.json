@@ -1,22 +1,22 @@
 [
   {
-    "change": "### Sources/TripPlannerCore/DayPlan.swift\n41: public mutating func add(_ stop: Stop) throws {\n42:     if stops.count > 10 { throw DayPlanError.tooManyStops }\n43:     stops.append(stop)\n44: }",
+    "change": "### Sources/Itinerary.swift\n8: func headline(for names: [String]) -> String {\n9:     let first = names[0]\n10:     return names.count > 1 ? \"\\(first) and \\(names.count - 1) more\" : first\n11: }",
     "output": {
       "findings": [
         {
           "severity": "blocker",
-          "category": "off_by_one",
-          "file": "Sources/TripPlannerCore/DayPlan.swift",
-          "line": 42,
-          "quote": "stops.count > 10",
-          "message": "The limit is 10 Stops but the check allows an 11th.",
-          "scenario": "With 10 Stops already in the Day Plan, calling add on an 11th Stop passes the check because 10 > 10 is false, so the Day Plan holds 11 Stops."
+          "category": "empty_collection",
+          "file": "Sources/Itinerary.swift",
+          "line": 9,
+          "quote": "names[0]",
+          "message": "The first element is read without checking that the list has one.",
+          "scenario": "A Traveller opens an Itinerary that has no names yet, so headline is called with an empty array and names[0] traps, crashing the app."
         }
       ]
     }
   },
   {
-    "change": "### Sources/TripPlannerCore/Trip.swift\n20: let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)\n21: guard !trimmed.isEmpty else { throw TripError.nameBlank }",
+    "change": "### Sources/Itinerary.swift\n8: func headline(for names: [String]) -> String {\n9:     guard let first = names.first else { return \"Empty\" }\n10:     return names.count > 1 ? \"\\(first) and \\(names.count - 1) more\" : first\n11: }",
     "output": {
       "findings": []
     }

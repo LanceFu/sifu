@@ -1,22 +1,22 @@
 [
   {
-    "change": "### Sources/TripPlannerCore/Stop.swift\n12: let first = String(name.prefix(1))\n13: print(\"Added stop \\(name) at \\(place.latitude), \\(place.longitude)\")",
+    "change": "### Sources/Sync.swift\n20: func upload(_ trip: Trip) async throws {\n21:     let url = URL(string: \"https://api.example.com/trips\")!\n22:     var request = URLRequest(url: url)\n23:     request.httpBody = try JSONEncoder().encode(trip)\n24:     _ = try await URLSession.shared.data(for: request)\n25: }",
     "output": {
       "findings": [
         {
-          "severity": "major",
-          "category": "data_in_logs",
-          "file": "Sources/TripPlannerCore/Stop.swift",
-          "line": 13,
-          "quote": "print(\"Added stop",
-          "message": "Coordinates of a Place are printed to the console log.",
-          "scenario": "A Traveller adds a Stop at their home address and the exact coordinates end up in the device log, which crash reports can include."
+          "severity": "blocker",
+          "category": "forbidden_network",
+          "file": "Sources/Sync.swift",
+          "line": 24,
+          "quote": "URLSession.shared.data(for: request)",
+          "message": "The change sends a Trip over the network, but REQ-5 says all data stays on the device and no network is needed.",
+          "scenario": "A Traveller saves a Trip while online and the full Trip, with its Places, is posted to a remote server, which breaks the offline-only guarantee in REQ-5."
         }
       ]
     }
   },
   {
-    "change": "### Sources/TripPlannerCore/Trip.swift\n21: guard !trimmed.isEmpty else { throw TripError.nameBlank }",
+    "change": "### Sources/Itinerary.swift\n9:     guard let first = names.first else { return \"Empty\" }",
     "output": {
       "findings": []
     }
