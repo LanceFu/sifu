@@ -1,0 +1,37 @@
+flowchart TD
+  S([Ticket]) --> load
+  subgraph DESIGN["Design stage"]
+    load --> checks["checks<br/>(rules: glossary, format,<br/>injection, protected paths)"]
+    load --> ra["review_ambiguity<br/>(LLM)"]
+    load --> rs["review_scope<br/>(LLM)"]
+    load --> rp["review_policy<br/>(LLM)"]
+    checks --> synth["synthesize<br/>(merge findings, draft spec)"]
+    ra --> synth
+    rs --> synth
+    rp --> synth
+  end
+  synth -->|blocking questions| eq[escalate_questions]
+  synth -->|spec ready| route["route<br/>(risk floor rules +<br/>two assessors, can only raise)"]
+  route -->|auto / auto with veto| accept
+  route -->|human tier| ed[escalate_decision]
+  eq --> ah{{"await_human<br/>(pause, checkpointed)"}}
+  ed --> ah
+  ah -->|approve| ad[approve_decision]
+  ah -->|close| cl[close_ticket]
+  ah -->|feedback| rev[revise]
+  rev -->|round under cap of 3| load
+  rev -->|cap reached| E([End: needs human])
+  cl --> E2([End: closed])
+  accept --> gate
+  ad --> gate
+  gate["plan_gate<br/>(gate facts allow build?)"] -->|yes| build["build<br/>(Claude Code in worktree,<br/>local model optional)"]
+  gate -->|no| E3([End])
+  build -->|ok, no protected paths| test
+  build -->|failed| E4([End: failed])
+  test --> done([Done])
+  classDef human fill:#fde7c8,stroke:#c77700
+  classDef llm fill:#e0e7ff,stroke:#4f46e5
+  classDef code fill:#e5f4e4,stroke:#2e7d32
+  class ah,eq,ed,ad,cl,rev human
+  class ra,rs,rp llm
+  class checks,synth,route,accept,gate,test code

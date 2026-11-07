@@ -1,0 +1,16 @@
+# REQ-4: a Stop's Duration is 5 to 720 minutes inclusive. Three seeded flaws.
+base: ebe6b67
+notes: Second demo diff, built on a different requirement than any few-shot example.
+expected:
+  - id: exclusive_range
+    file: Sources/TripPlannerCore/Stop.swift
+    quotes: ["durationMinutes > 5 && durationMinutes < 720"]
+    critic: edge_cases
+  - id: force_unwrap_crash
+    file: Sources/TripPlannerCore/Stop.swift
+    quotes: ["Int(durationText)!"]
+    critic: edge_cases
+  - id: wrong_error
+    file: Sources/TripPlannerCore/Stop.swift
+    quotes: ["throw StopError.invalidDuration", "case invalidDuration"]
+    critic: contract

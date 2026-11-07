@@ -94,7 +94,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     """Open a connection with foreign keys on, creating the parent directory if needed."""
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -117,6 +117,15 @@ def create_project(
     return int(cur.lastrowid)
 
 
+def get_or_create_project(
+    conn: sqlite3.Connection, name: str, repo_path: str, github_repo: str | None = None
+) -> int:
+    row = conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()
+    if row:
+        return int(row["id"])
+    return create_project(conn, name, repo_path, github_repo)
+
+
 def create_ticket(conn: sqlite3.Connection, project_id: int, title: str, body: str = "") -> int:
     with conn:
         cur = conn.execute(
@@ -126,6 +135,16 @@ def create_ticket(conn: sqlite3.Connection, project_id: int, title: str, body: s
     ticket_id = int(cur.lastrowid)
     append_event(conn, ticket_id, "ticket_created", "user", {"title": title})
     return ticket_id
+
+
+def append_to_ticket_body(conn: sqlite3.Connection, ticket_id: int, text: str) -> None:
+    """Add a clarification to the end of a ticket's body (a human's answer to a question)."""
+    with conn:
+        conn.execute(
+            "UPDATE tickets SET body = body || ?, updated_at = datetime('now') WHERE id = ?",
+            (f"\n\n{text}", ticket_id),
+        )
+    append_event(conn, ticket_id, "ticket_clarified", "human", {"text": text[:500]})
 
 
 def get_ticket(conn: sqlite3.Connection, ticket_id: int) -> sqlite3.Row:

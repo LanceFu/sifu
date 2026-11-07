@@ -1,0 +1,15 @@
+[
+  {
+    "ticket": "Title: Stops, export and sharing\nBody: Add Stops to Day Plans, export an Itinerary as text, and let Travellers share a Trip with a Companion.",
+    "output": {
+      "findings": [
+        {"category": "bundled_behaviours", "severity": "major", "message": "Three independent behaviours: adding Stops (REQ-3), exporting (REQ-8), sharing. Split into three tickets.", "evidence": "Add Stops to Day Plans, export an Itinerary as text, and let Travellers share"}
+      ],
+      "questions": ["Which one of the three should this ticket cover first?"]
+    }
+  },
+  {
+    "ticket": "Title: Limit Day Plans to 10 Stops\nBody: Given a Day Plan with 10 Stops, When a Traveller adds another Stop, Then adding fails with a tooManyStops error.",
+    "output": {"findings": [], "questions": []}
+  }
+]

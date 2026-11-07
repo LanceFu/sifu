@@ -83,3 +83,14 @@ def test_foreign_keys_are_enforced(conn):
 
 def test_run_log_accepts_missing_token_counts(conn, ticket):
     assert db.record_run(conn, "reviewer", "gemma4:31b-mlx", ticket_id=ticket, latency_ms=1200) > 0
+
+
+def test_get_or_create_project_reuses_existing_name(conn):
+    first = db.get_or_create_project(conn, "TripPlanner", "/tmp/tripplanner-ios")
+    assert db.get_or_create_project(conn, "TripPlanner", "/tmp/tripplanner-ios") == first
+
+
+def test_get_or_create_project_is_idempotent(conn):
+    first = db.get_or_create_project(conn, "TripPlanner", "/tmp/a", "o/r")
+    assert db.get_or_create_project(conn, "TripPlanner", "/tmp/b") == first
+    assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1

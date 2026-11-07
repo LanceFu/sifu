@@ -67,6 +67,7 @@ class DecisionContext(BaseModel):
     iteration: int = 0
     conflicts_with_requirements: bool = False
     ci_green: bool | None = None  # only meaningful for MERGE
+    outside_spec_paths: list[str] = Field(default_factory=list)  # only meaningful for ACCEPT_PLAN
 
 
 class DecisionResult(BaseModel):
@@ -76,3 +77,99 @@ class DecisionResult(BaseModel):
     floor_tier: RiskTier
     rules_fired: list[str] = Field(default_factory=list)
     assessor_tiers: list[RiskTier] = Field(default_factory=list)
+
+
+class LLMFinding(BaseModel):
+    """A finding as a reviewer model writes it; the code adds the reviewer's name."""
+
+    category: str
+    severity: Severity
+    message: str
+    evidence: str | None = None
+
+
+class ReviewerOutput(BaseModel):
+    """The JSON a reviewer model must return."""
+
+    findings: list[LLMFinding] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+
+
+class ReviewerReport(BaseModel):
+    """A reviewer's findings plus whether the deterministic fallback had to replace the model."""
+
+    reviewer: str
+    findings: list[Finding] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+    degraded: bool = False
+
+
+class Spec(BaseModel):
+    """The accepted shape of spec.md."""
+
+    title: str
+    summary: str
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    requirement_refs: list[str] = Field(default_factory=list)
+    out_of_scope: list[str] = Field(default_factory=list)
+    affected_paths: list[str] = Field(default_factory=list)
+
+
+class Plan(BaseModel):
+    """The accepted shape of plan.md: how the implementer should make the change."""
+
+    summary: str
+    steps: list[str] = Field(default_factory=list)
+    files_to_change: list[str] = Field(default_factory=list)
+    tests_to_add: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    degraded: bool = False  # True when the deterministic fallback wrote it
+
+
+class ClarifyingQuestion(BaseModel):
+    """A question for the ticket author, raised when the Design stage cannot write a spec.
+
+    ``sources`` lists every reviewer or check that asked it, because similar questions are merged.
+    """
+
+    question: str
+    sources: list[str]
+
+
+class AssessorOutput(BaseModel):
+    """The JSON a risk assessor model must return."""
+
+    tier: RiskTier
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str
+
+
+class LLMCriticFinding(BaseModel):
+    """One problem a critic claims to see in the diff. Code checks the citation before use."""
+
+    severity: Literal["blocker", "major", "minor"]
+    category: str
+    file: str
+    line: int
+    quote: str  # the exact text from the cited line that shows the problem
+    message: str
+    scenario: str  # a concrete input or sequence that makes the code fail
+
+
+class CriticOutput(BaseModel):
+    """The JSON a critic model must return."""
+
+    findings: list[LLMCriticFinding] = Field(default_factory=list)
+
+
+class ConfirmOutput(BaseModel):
+    """A second look at one blocker: do the cited lines support the claim?"""
+
+    verdict: Literal["confirmed", "refuted"] = "confirmed"
+    reason: str = ""
+
+
+class CheckedFinding(LLMCriticFinding):
+    """A critic finding after the citation check; ``moved_from`` is the line before a correction."""
+
+    moved_from: int | None = None

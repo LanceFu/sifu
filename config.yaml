@@ -14,8 +14,9 @@ models:
     - "gemma4:31b-mlx"
 
 implementer:
-  backend: cloud            # cloud | ollama
-  model: null               # cloud: Claude Code default. ollama: e.g. "qwen3-coder:30b"
+  backend: cloud            # cloud | ollama. Override once with SIFU_IMPLEMENTER_BACKEND=ollama
+  cloud_model: null         # null: the Claude Code default
+  ollama_model: "qwen3-coder:30b"
   max_turns: 30
   timeout_seconds: 1800
   allowed_tools:
@@ -31,12 +32,43 @@ implementer:
     - "Bash(git add:*)"
     - "Bash(git commit:*)"
 
+planner:
+  enabled: false            # true: write plan.md after the spec is accepted and gate Build on it
+  listing_cap: 150
+  excerpt_chars: 3000
+  total_chars: 15000
+
+critic:                     # LLM review of the diff after verify passes (model: models.code_reviewer)
+  enabled: false            # true: edge-case, contract and security critics; blockers go back to Build
+  max_diff_chars: 24000
+  min_scenario_words: 6     # a finding needs a concrete failing scenario at least this long
+  names: [edge_cases, contract, security]
+
+verify:                     # run by Sifu itself after every implementer run, cheapest first
+  timeout_seconds: 900
+  max_findings: 20          # findings sent back to the implementer per round
+  extra_allowed_paths:      # files the implementer may add even when the spec does not list them
+    - "Tests/"
+  steps:
+    - name: build
+      command: ["swift", "build", "-Xswiftc", "-warnings-as-errors"]
+      parser: compiler
+    - name: swiftlint
+      command: ["swiftlint", "lint", "--strict", "--reporter", "json"]
+      parser: swiftlint_json
+    - name: test
+      command: ["swift", "test"]
+      parser: compiler
+
 router:
   merge_mode: risk_based    # manual | risk_based | auto (floor rules apply in every mode)
   max_build_iterations: 3
+  max_design_rounds: 3          # clarification loops in the Design stage before the ticket fails
+  max_tokens_per_ticket: 400000 # model tokens (prompt + completion) per ticket before it fails
   protected_paths:          # a trailing slash means "everything under this directory"
     - ".github/"
     - ".claude/"
+    - ".swiftlint.yml"
     - "conventions.md"
     - "docs/glossary.yaml"
     - "Package.swift"
@@ -45,6 +77,13 @@ github:
   repo: "LanceFu/tripplanner-ios"
   token_env: SIFU_GITHUB_TOKEN         # optional override, checked first
   keychain_service: sifu-github-token  # macOS Keychain item used when the env var is unset
+  base_branch: main
+  required_check: test      # the Actions check Sifu waits for before the merge decision
+  ci_timeout_seconds: 600
+  ci_poll_seconds: 15
+  merge_method: squash      # squash | merge | rebase
+  commit_name: Sifu
+  commit_email: sifu@users.noreply.github.com
 
 workspace:
   product_repo_path: "~/Development/AgenticAI/tripplanner-ios"

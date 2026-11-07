@@ -41,6 +41,8 @@ def floor_tier(ctx: DecisionContext, cfg: RouterConfig) -> tuple[RiskTier, list[
         rules.append("loop_cap_reached")
     if ctx.conflicts_with_requirements:
         rules.append("conflicts_with_requirement")
+    if ctx.decision_type == DecisionType.ACCEPT_PLAN and ctx.outside_spec_paths:
+        rules.append("plan_outside_spec")
     if ctx.decision_type == DecisionType.MERGE:
         if ctx.ci_green is not True:
             rules.append("ci_not_green")
@@ -57,7 +59,10 @@ def decide(
     tier = floor
     assessor_tiers = [a.tier for a in assessments]
 
-    skip_assessors = ctx.decision_type == DecisionType.MERGE and cfg.merge_mode == "auto"
+    # A plan is judged by code alone: the spec it follows was already assessed by the models.
+    skip_assessors = ctx.decision_type == DecisionType.ACCEPT_PLAN or (
+        ctx.decision_type == DecisionType.MERGE and cfg.merge_mode == "auto"
+    )
     if not skip_assessors:
         if not assessments:
             rules.append("missing_assessment")

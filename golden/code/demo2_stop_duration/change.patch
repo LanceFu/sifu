@@ -1,0 +1,29 @@
+diff --git a/Sources/TripPlannerCore/Stop.swift b/Sources/TripPlannerCore/Stop.swift
+index 03691d6..62989ac 100644
+--- a/Sources/TripPlannerCore/Stop.swift
++++ b/Sources/TripPlannerCore/Stop.swift
+@@ -6,9 +6,23 @@ public struct Stop: Identifiable, Equatable, Sendable {
+     public let place: Place
+     public let durationMinutes: Int
+ 
+-    public init(id: UUID = UUID(), place: Place, durationMinutes: Int) {
++    public init(id: UUID = UUID(), place: Place, durationMinutes: Int) throws {
++        guard durationMinutes > 5 && durationMinutes < 720 else {
++            throw StopError.invalidDuration
++        }
+         self.id = id
+         self.place = place
+         self.durationMinutes = durationMinutes
+     }
++
++    /// Creates a Stop from the Duration a Traveller typed, in whole minutes.
++    public init(place: Place, durationText: String) throws {
++        let minutes = Int(durationText)!
++        try self.init(place: place, durationMinutes: minutes)
++    }
++}
++
++/// Errors raised when a Stop is created.
++public enum StopError: Error, Equatable {
++    case invalidDuration
+ }

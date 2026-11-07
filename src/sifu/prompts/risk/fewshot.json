@@ -1,0 +1,14 @@
+[
+  {
+    "ticket": "Title: Reject blank Trip names\nSpec: Given a Traveller saves a Trip, When the name is blank, Then saving fails with nameBlank. Affected: Sources/TripPlannerCore/Trip.swift, Tests/TripPlannerCoreTests/TripTests.swift",
+    "output": {"tier": 0, "confidence": 0.9, "rationale": "One small validation in one type, already described by REQ-1 and easy to test."}
+  },
+  {
+    "ticket": "Title: Duplicate a Trip\nSpec: Given a Trip with Day Plans and Stops, When the Traveller duplicates it, Then a new Trip with copies of every Day Plan and Stop exists. Affected: Sources/TripPlannerCore/Trip.swift, DayPlan.swift, Stop.swift",
+    "output": {"tier": 1, "confidence": 0.7, "rationale": "Touches three types and copies nested data, but the behaviour is fully specified (REQ-6)."}
+  },
+  {
+    "ticket": "Title: Add a dependency\nSpec: Given the package builds, When we add swift-collections, Then Package.swift lists it. Affected: Package.swift",
+    "output": {"tier": 2, "confidence": 0.95, "rationale": "Package.swift is protected, and conventions say not to add third-party dependencies."}
+  }
+]
