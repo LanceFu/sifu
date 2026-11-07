@@ -8,6 +8,7 @@
           "category": "off_by_one",
           "file": "Sources/TripPlannerCore/DayPlan.swift",
           "line": 42,
+          "quote": "stops.count > 10",
           "message": "The limit is 10 Stops but the check allows an 11th.",
           "scenario": "With 10 Stops already in the Day Plan, calling add on an 11th Stop passes the check because 10 > 10 is false, so the Day Plan holds 11 Stops."
         }

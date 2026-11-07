@@ -11,6 +11,7 @@ from sifu import db  # noqa: E402
 from sifu.critic import (  # noqa: E402
     added_index,
     check_citations,
+    merge_findings,
     render_diff,
     run_critic,
     to_implementer_findings,
@@ -26,12 +27,13 @@ FILE = "Sources/DayPlan.swift"
 SCENARIO = "With 10 Stops in the plan, adding an 11th passes the check and the plan holds 11."
 
 
-def finding(severity="blocker", line=2, scenario=SCENARIO, file=FILE):
+def finding(severity="blocker", line=2, scenario=SCENARIO, file=FILE, quote="count > 10"):
     return {
         "severity": severity,
         "category": "off_by_one",
         "file": file,
         "line": line,
+        "quote": quote,
         "message": "The limit check allows one Stop too many.",
         "scenario": scenario,
     }
@@ -94,13 +96,24 @@ def test_citations_must_point_at_added_lines_and_name_a_scenario():
 
     good = make()
     kept, dropped = check_citations(
-        [good, make(file="Other.swift"), make(line=9), make(scenario="it breaks")], index, 6
+        [
+            good,
+            make(file="Other.swift"),
+            make(line=9),
+            make(scenario="it breaks"),
+            make(quote="does not append"),
+            make(quote="COUNT >  10"),
+        ],
+        index,
+        6,
     )
     assert kept == [good]
     assert [why for _, why in dropped] == [
         "file not in the diff",
         "line was not added by the change",
         "no concrete failing scenario",
+        "quote is not on the cited line",
+        "quote is not on the cited line",
     ]
 
 
@@ -109,6 +122,19 @@ def test_the_diff_is_numbered_and_cut_at_the_limit():
     text, cut = render_diff(index, 80)
     assert cut and "### A.swift\n2: " in text and "[diff cut here]" in text
     assert render_diff(index, 10_000)[1] is False
+
+
+def test_one_bug_reported_by_three_critics_becomes_one_finding():
+    group = [
+        {**finding("minor"), "critic": "security"},
+        {**finding("blocker"), "critic": "edge_cases"},
+        {**finding("major"), "critic": "contract"},
+        {**finding("major", line=7), "critic": "contract"},
+    ]
+    merged = merge_findings(group)
+    assert len(merged) == 2
+    top = next(f for f in merged if f["line"] == 2)
+    assert top["severity"] == "blocker" and top["critic"] == "contract+edge_cases+security"
 
 
 def test_only_blockers_go_back_to_the_implementer():
@@ -218,7 +244,7 @@ class Hub:
 
 def test_major_and_minor_findings_become_a_pr_comment(conn, cfg, make_deps, make_ticket, worktree):
     cfg.critic.enabled = True
-    replies = {"Security Critic": reply(finding("major"), finding("minor", line=3))}
+    replies = {"Security Critic": reply(finding("major"), finding("minor", line=3, quote="}"))}
     deps = make_deps(FakeLLM(replies))
     hub = Hub()
     deps.implementer = Implementer(worktree)

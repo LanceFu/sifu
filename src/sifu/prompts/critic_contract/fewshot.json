@@ -8,6 +8,7 @@
           "category": "wrong_error",
           "file": "Sources/TripPlannerCore/DayPlan.swift",
           "line": 42,
+          "quote": "throw DayPlanError.limitReached",
           "message": "The criterion requires a tooManyStops error, but the code throws limitReached.",
           "scenario": "A caller adds an 11th Stop and checks for DayPlanError.tooManyStops as the spec says; the catch never matches because limitReached is thrown."
         }

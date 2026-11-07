@@ -151,6 +151,7 @@ class LLMCriticFinding(BaseModel):
     category: str
     file: str
     line: int
+    quote: str  # the exact text from the cited line that shows the problem
     message: str
     scenario: str  # a concrete input or sequence that makes the code fail
 

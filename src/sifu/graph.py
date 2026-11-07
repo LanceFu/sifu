@@ -734,7 +734,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
 
         with ThreadPoolExecutor(max_workers=len(cfg.critic.names)) as pool:
             reports = list(pool.map(one, cfg.critic.names))
-        kept = [f for r in reports for f in r.kept]
+        kept = critic_pass.merge_findings([f for r in reports for f in r.kept])
         dropped = [f for r in reports for f in r.dropped]
         degraded = [r.critic for r in reports if r.degraded]
         deps.log(

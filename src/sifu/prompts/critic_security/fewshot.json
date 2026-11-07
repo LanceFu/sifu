@@ -8,6 +8,7 @@
           "category": "data_in_logs",
           "file": "Sources/TripPlannerCore/Stop.swift",
           "line": 13,
+          "quote": "print(\"Added stop",
           "message": "Coordinates of a Place are printed to the console log.",
           "scenario": "A Traveller adds a Stop at their home address and the exact coordinates end up in the device log, which crash reports can include."
         }

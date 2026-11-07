@@ -83,6 +83,10 @@ def build_user_prompt(spec_text: str, diff_text: str, checks: str) -> str:
     )
 
 
+def _squash(text: str) -> str:
+    return " ".join(text.split())
+
+
 def check_citations(
     findings: list[LLMCriticFinding], index: dict[str, dict[int, str]], min_words: int
 ) -> tuple[list[LLMCriticFinding], list[tuple[LLMCriticFinding, str]]]:
@@ -93,6 +97,8 @@ def check_citations(
             dropped.append((f, "file not in the diff"))
         elif f.line not in index[f.file]:
             dropped.append((f, "line was not added by the change"))
+        elif not f.quote.strip() or _squash(f.quote) not in _squash(index[f.file][f.line]):
+            dropped.append((f, "quote is not on the cited line"))
         elif len(f.scenario.split()) < min_words:
             dropped.append((f, "no concrete failing scenario"))
         else:
@@ -132,6 +138,22 @@ def run_critic(
         dropped=[{**f.model_dump(), "critic": name, "why": why} for f, why in dropped],
     )
     return report, outcome
+
+
+_RANK = {"minor": 0, "major": 1, "blocker": 2}
+
+
+def merge_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One finding per file and line: the highest severity wins and every critic is named."""
+    groups: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for f in kept:
+        groups.setdefault((f["file"], f["line"]), []).append(f)
+    merged = []
+    for group in groups.values():
+        top = max(group, key=lambda f: _RANK[f["severity"]])
+        critics = sorted({f["critic"] for f in group})
+        merged.append({**top, "critic": "+".join(critics)})
+    return merged
 
 
 def to_implementer_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
