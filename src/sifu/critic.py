@@ -322,3 +322,75 @@ def render_pr_comment(notes: list[dict[str, Any]], degraded: list[str]) -> str:
     if degraded:
         lines.append(f"- These critics gave no valid answer: {', '.join(degraded)}.")
     return "Sifu critic notes (these did not block the merge decision):\n\n" + "\n".join(lines)
+
+
+@dataclass
+class ReviewResult:
+    """The outcome of the whole critic pass on one worktree."""
+
+    merged: list[dict[str, Any]] = field(default_factory=list)
+    dropped: list[dict[str, Any]] = field(default_factory=list)
+    degraded: list[str] = field(default_factory=list)
+    index: dict[str, dict[int, str]] = field(default_factory=dict)
+    tokens: int = 0
+
+
+def review_worktree(
+    worktree: Path,
+    spec_text: str,
+    *,
+    llm: LLM,
+    critic_cfg: Any,
+    critic_model: str,
+    checker_model: str,
+    added: list[tuple[str, int, str]],
+    prompts_dir: Path = PROMPTS_DIR,
+) -> ReviewResult:
+    """Run every critic, drop refuted blockers and merge: what the graph does, without the logging.
+
+    Used by the golden-set runner. ``added`` is ``verify.added_lines(worktree)``.
+    """
+    index = added_index(added)
+    view = build_view(worktree, index, critic_cfg.context_lines)
+    result = ReviewResult(index=index)
+    kept: list[dict[str, Any]] = []
+    for name in critic_cfg.names:
+        report, outcome = run_critic(
+            name,
+            spec_text=spec_text,
+            index=index,
+            view=view,
+            checks="diff, build, swiftlint, test",
+            llm=llm,
+            model=critic_model,
+            max_diff_chars=critic_cfg.max_diff_chars,
+            min_scenario_words=critic_cfg.min_scenario_words,
+            prompts_dir=prompts_dir,
+        )
+        result.tokens += (outcome.prompt_tokens or 0) + (outcome.completion_tokens or 0)
+        kept += report.kept
+        result.dropped += report.dropped
+        if report.degraded:
+            result.degraded.append(name)
+    if critic_cfg.confirm_blockers:
+        survivors = []
+        for f in kept:
+            if f["severity"] != "blocker":
+                survivors.append(f)
+                continue
+            ok, reason, outcome = confirm_blocker(
+                f,
+                view=view,
+                llm=llm,
+                model=checker_model,
+                radius=critic_cfg.context_lines,
+                prompts_dir=prompts_dir,
+            )
+            result.tokens += (outcome.prompt_tokens or 0) + (outcome.completion_tokens or 0)
+            if ok:
+                survivors.append(f)
+            else:
+                result.dropped.append({**f, "why": f"refuted on confirmation: {reason}"})
+        kept = survivors
+    result.merged = merge_findings(kept)
+    return result

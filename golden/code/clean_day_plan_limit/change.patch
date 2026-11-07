@@ -1,0 +1,26 @@
+diff --git a/Sources/TripPlannerCore/DayPlan.swift b/Sources/TripPlannerCore/DayPlan.swift
+index 7571dda..ee33c3e 100644
+--- a/Sources/TripPlannerCore/DayPlan.swift
++++ b/Sources/TripPlannerCore/DayPlan.swift
+@@ -17,8 +17,19 @@ public struct DayPlan: Identifiable, Equatable, Sendable {
+         stops.reduce(0) { $0 + $1.durationMinutes }
+     }
+ 
+-    /// Appends a Stop to the end of the Day Plan.
+-    public mutating func add(_ stop: Stop) {
++    /// Appends a Stop to the end of the Day Plan. A Day Plan holds at most 10 Stops.
++    public mutating func add(_ stop: Stop) throws {
++        guard stops.count < DayPlan.maximumStops else {
++            throw DayPlanError.tooManyStops
++        }
+         stops.append(stop)
+     }
++
++    /// The most Stops one Day Plan can hold.
++    public static let maximumStops = 10
++}
++
++/// Errors raised when a Day Plan is changed.
++public enum DayPlanError: Error, Equatable {
++    case tooManyStops
+ }
