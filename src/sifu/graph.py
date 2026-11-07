@@ -712,6 +712,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         tid = state["ticket_id"]
         spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
         index = critic_pass.added_index(added_lines(Path(state["worktree"])))
+        view = critic_pass.build_view(Path(state["worktree"]), index, cfg.critic.context_lines)
         steps = [e for e in db.list_events(deps.conn, tid) if e["kind"] == "verify_result"]
         names = [s["name"] for s in json.loads(steps[-1]["payload"])["steps"]] if steps else []
         model = cfg.models.code_reviewer
@@ -722,6 +723,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
                 name,
                 spec_text=spec_text,
                 index=index,
+                view=view,
                 checks=", ".join(names) or "none",
                 llm=deps.llm,
                 model=model,
@@ -743,7 +745,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
                 deps.check_budget(tid)
                 ok, reason, outcome = critic_pass.confirm_blocker(
                     f,
-                    index=index,
+                    view=view,
                     llm=deps.llm,
                     model=checker,
                     radius=cfg.critic.context_lines,

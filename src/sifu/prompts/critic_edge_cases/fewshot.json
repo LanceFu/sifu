@@ -1,6 +1,6 @@
 [
   {
-    "change": "### Sources/Itinerary.swift\n8: func headline(for names: [String]) -> String {\n9:     let first = names[0]\n10:     return names.count > 1 ? \"\\(first) and \\(names.count - 1) more\" : first\n11: }",
+    "change": "### Sources/Itinerary.swift\n   8 +| func headline(for names: [String]) -> String {\n   9 +|     let first = names[0]\n  10 +|     return names.count > 1 ? \"\\(first) and \\(names.count - 1) more\" : first\n  11 +| }",
     "output": {
       "findings": [
         {
@@ -16,7 +16,7 @@
     }
   },
   {
-    "change": "### Sources/Itinerary.swift\n8: func headline(for names: [String]) -> String {\n9:     guard let first = names.first else { return \"Empty\" }\n10:     return names.count > 1 ? \"\\(first) and \\(names.count - 1) more\" : first\n11: }",
+    "change": "### Sources/Itinerary.swift\n   8 +| func headline(for names: [String]) -> String {\n   9 +|     guard let first = names.first else { return \"Empty\" }\n  10 +|     return names.count > 1 ? \"\\(first) and \\(names.count - 1) more\" : first\n  11 +| }",
     "output": {
       "findings": []
     }

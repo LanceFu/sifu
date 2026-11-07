@@ -48,12 +48,51 @@ def added_index(rows: list[tuple[str, int, str]]) -> dict[str, dict[int, str]]:
     return dict(index)
 
 
-def render_diff(index: dict[str, dict[int, str]], limit: int) -> tuple[str, bool]:
-    """Added lines with their new line numbers, cut at ``limit`` characters."""
+View = dict[str, dict[int, tuple[str, str]]]  # file -> line -> ("+" added | " " context, text)
+
+
+def view_from_index(index: dict[str, dict[int, str]]) -> View:
+    """A view with only the added lines, for callers that have no worktree to read."""
+    return {name: {n: ("+", t) for n, t in rows.items()} for name, rows in index.items()}
+
+
+def build_view(worktree: Path, index: dict[str, dict[int, str]], radius: int) -> View:
+    """Added lines plus ``radius`` unchanged lines around each, read from the files as they are now.
+
+    The critics must see what surrounds a change: the behaviour a claim says is missing is often on
+    the next, unchanged line. Citations are still restricted to the added lines.
+    """
+    view: View = {}
+    for name, added in index.items():
+        rows: dict[int, tuple[str, str]] = {}
+        try:
+            lines = (worktree / name).read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            lines = []
+        for n in added:
+            for m in range(max(1, n - radius), min(len(lines), n + radius) + 1):
+                rows[m] = (" ", lines[m - 1])
+        rows.update({n: ("+", t) for n, t in added.items()})
+        view[name] = rows
+    return view
+
+
+def _row(n: int, kind: str, text: str) -> str:
+    return f"{n:>4} {kind}| {text}"
+
+
+def render_diff(view: View, limit: int) -> tuple[str, bool]:
+    """The view as numbered rows (``+`` added, blank context), cut at ``limit`` characters."""
     parts: list[str] = []
     size = 0
-    for name in sorted(index):
-        block = f"### {name}\n" + "\n".join(f"{n}: {t}" for n, t in sorted(index[name].items()))
+    for name in sorted(view):
+        rows, previous = [], None
+        for n in sorted(view[name]):
+            if previous is not None and n > previous + 1:
+                rows.append("     ...")
+            rows.append(_row(n, *view[name][n]))
+            previous = n
+        block = f"### {name}\n" + "\n".join(rows)
         if size + len(block) > limit:
             parts.append(block[: max(limit - size, 0)] + "\n[diff cut here]")
             return "\n\n".join(parts), True
@@ -79,7 +118,9 @@ def build_user_prompt(spec_text: str, diff_text: str, checks: str) -> str:
     return (
         f"{UNTRUSTED_NOTE}\n\n<spec>\n{spec_text.strip()}\n</spec>\n\n"
         f"Deterministic checks already passed: {checks}\n\n"
-        f"<diff>\nLines added by the change, as `line: text`:\n{diff_text}\n</diff>"
+        "<diff>\nRows are `line  mark| text`. A `+` mark is a line the change added; a blank mark "
+        "is an unchanged line shown as context. Read the context before you say something is "
+        f"missing, and cite only `+` lines.\n{diff_text}\n</diff>"
     )
 
 
@@ -111,6 +152,7 @@ def run_critic(
     *,
     spec_text: str,
     index: dict[str, dict[int, str]],
+    view: View,
     checks: str,
     llm: LLM,
     model: str,
@@ -120,7 +162,7 @@ def run_critic(
 ) -> tuple[CriticReport, StructuredOutcome[CriticOutput]]:
     """Run one critic. If the model never answers, the report is degraded and adds nothing."""
     system, _ = load_critic(name, prompts_dir)
-    diff_text, _cut = render_diff(index, max_diff_chars)
+    diff_text, _cut = render_diff(view, max_diff_chars)
     outcome = structured_call(
         llm,
         model=model,
@@ -144,15 +186,15 @@ _RANK = {"minor": 0, "major": 1, "blocker": 2}
 
 
 def merge_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge findings that sit on the same file and line and are on the same side of blocking.
+    """One finding per file and line. Blockers are confirmed before this runs.
 
-    A blocker is never merged with a lower severity, so a false blocker cannot bury a real major
-    finding. Inside a group the highest severity gives the headline (the first one on a tie, so the
-    order of ``critic.names`` decides) and every other distinct message is kept under ``also``.
+    The highest severity gives the headline (the first one on a tie, so the order of
+    ``critic.names`` decides) and every other distinct message is kept under ``also``, so no
+    claim is lost to a merge.
     """
-    groups: dict[tuple[str, int, bool], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, int], list[dict[str, Any]]] = {}
     for f in kept:
-        groups.setdefault((f["file"], f["line"], f["severity"] == "blocker"), []).append(f)
+        groups.setdefault((f["file"], f["line"]), []).append(f)
     merged = []
     for group in groups.values():
         top = max(group, key=lambda f: _RANK[f["severity"]])
@@ -166,10 +208,10 @@ def merge_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
-def context_lines(index: dict[str, dict[int, str]], file: str, line: int, radius: int) -> str:
-    """The added lines within ``radius`` of the cited line, numbered."""
-    rows = sorted((n, t) for n, t in index.get(file, {}).items() if abs(n - line) <= radius)
-    return "\n".join(f"{n}: {t}" for n, t in rows)
+def context_lines(view: View, file: str, line: int, radius: int) -> str:
+    """The rows within ``radius`` of the cited line, added and unchanged, numbered."""
+    rows = sorted((n, m, t) for n, (m, t) in view.get(file, {}).items() if abs(n - line) <= radius)
+    return "\n".join(_row(n, m, t) for n, m, t in rows)
 
 
 def load_confirm(prompts_dir: Path = PROMPTS_DIR) -> str:
@@ -187,7 +229,7 @@ def load_confirm(prompts_dir: Path = PROMPTS_DIR) -> str:
 def confirm_blocker(
     finding: dict[str, Any],
     *,
-    index: dict[str, dict[int, str]],
+    view: View,
     llm: LLM,
     model: str,
     radius: int,
@@ -198,7 +240,7 @@ def confirm_blocker(
     Returns (confirmed, reason, outcome). If the model gives no valid answer the blocker stands:
     a real blocker must not be lost because the checker was down.
     """
-    lines = context_lines(index, finding["file"], finding["line"], radius)
+    lines = context_lines(view, finding["file"], finding["line"], radius)
     user = (
         f"{UNTRUSTED_NOTE}\n\n<claim>\n{finding['message']}\n"
         f"Failing scenario given: {finding['scenario']}\n"

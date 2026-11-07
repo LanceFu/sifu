@@ -1,6 +1,6 @@
 [
   {
-    "change": "### Sources/Export.swift\n14: public func itineraryText(for stops: [Stop]) -> String {\n15:     stops.sorted { $0.place.name < $1.place.name }\n16:         .map { $0.place.name }\n17:         .joined(separator: \"\\n\")\n18: }",
+    "change": "### Sources/Export.swift\n  14 +| public func itineraryText(for stops: [Stop]) -> String {\n  15 +|     stops.sorted { $0.place.name < $1.place.name }\n  16 +|         .map { $0.place.name }\n  17 +|         .joined(separator: \"\\n\")\n  18 +| }",
     "output": {
       "findings": [
         {
@@ -16,7 +16,7 @@
     }
   },
   {
-    "change": "### Sources/Export.swift\n15:     stops.map { $0.place.name }\n16:         .joined(separator: \"\\n\")",
+    "change": "### Sources/Export.swift\n  15 +|     stops.map { $0.place.name }\n  16 +|         .joined(separator: \"\\n\")",
     "output": {
       "findings": []
     }

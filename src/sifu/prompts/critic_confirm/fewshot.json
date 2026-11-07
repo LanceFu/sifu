@@ -3,7 +3,7 @@
     "claim": "The function never stores the computed value in the cache, so every call recomputes it.",
     "cited": "Sources/Store.swift:31",
     "quote": "let value = compute(key)",
-    "lines": "30: func load(_ key: String) -> Int {\n31:     let value = compute(key)\n32:     cache[key] = value\n33:     return value\n34: }",
+    "lines": "  30  | func load(_ key: String) -> Int {\n  31 +|     let value = compute(key)\n  32  |     cache[key] = value\n  33  |     return value\n  34  | }",
     "output": {
       "verdict": "refuted",
       "reason": "Line 32 stores the value in the cache right after it is computed."
@@ -13,7 +13,7 @@
     "claim": "The text is converted with a force unwrap, so non-numeric input crashes.",
     "cited": "Sources/Parse.swift:12",
     "quote": "Int(text)!",
-    "lines": "11: func minutes(from text: String) -> Int {\n12:     return Int(text)!\n13: }",
+    "lines": "  11  | func minutes(from text: String) -> Int {\n  12 +|     return Int(text)!\n  13  | }",
     "output": {
       "verdict": "confirmed",
       "reason": "Line 12 force-unwraps Int(text), which is nil for non-numeric text."

@@ -16,6 +16,7 @@ from pathlib import Path
 from sifu.config import load_config
 from sifu.critic import (
     added_index,
+    build_view,
     confirm_blocker,
     merge_findings,
     run_critic,
@@ -34,7 +35,9 @@ def main() -> None:
     args = parser.parse_args()
     cfg = load_config(ROOT / "config.yaml")
     llm = OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
-    index = added_index(added_lines(Path(args.worktree).expanduser()))
+    worktree = Path(args.worktree).expanduser()
+    index = added_index(added_lines(worktree))
+    view = build_view(worktree, index, cfg.critic.context_lines)
     spec = Path(args.spec).expanduser().read_text(encoding="utf-8")
     all_kept = []
     for name in cfg.critic.names:
@@ -42,6 +45,7 @@ def main() -> None:
             name,
             spec_text=spec,
             index=index,
+            view=view,
             checks="diff, build, swiftlint, test",
             llm=llm,
             model=cfg.models.code_reviewer,
@@ -69,7 +73,7 @@ def main() -> None:
                 continue
             ok, reason, _ = confirm_blocker(
                 f,
-                index=index,
+                view=view,
                 llm=llm,
                 model=checker,
                 radius=cfg.critic.context_lines,

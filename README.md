@@ -159,18 +159,21 @@ the push or draft PR fails, the error is logged and the ticket still waits for a
 ## Critic pass
 
 With `critic.enabled: true`, once every deterministic check has passed, three narrow critics (edge
-cases, contract against the acceptance criteria, security) read the lines the change added. They run
+cases, contract against the acceptance criteria, security) read the change. They run
 in parallel on `models.code_reviewer`, a different family from the author, each with its own persona,
 rubric and few-shot examples (`prompts/critic_*`). A critic can add findings but never clear one:
 
+- The critics and the checker see each change with `critic.context_lines` unchanged lines around it,
+  read from the worktree and marked as context, because the behaviour a claim says is missing is often
+  on the next, unchanged line.
 - Every finding must cite a line the change added and give a concrete failing scenario. Code drops
   the rest (`critic_result` events list kept and dropped findings with the reason).
 - Each blocker gets a second look before it counts: a Claim Checker prompt on `models.author` (a
   different family from the critics, or `critic.confirm_model`) sees the claim and the added lines
   around it and may refute it. Refuted blockers are dropped and logged; if the checker gives no valid
   answer the blocker stands. Only blockers are checked, so the cost is one call per blocker.
-- Findings on the same line are merged only on the same side of blocking, and every distinct message
-  is kept (`also`), so a false blocker cannot hide a real major finding.
+- Findings on the same file and line are merged into one; the highest severity gives the headline
+  and every other distinct message is kept (`also`), so no claim is lost.
 - Blockers go back to the implementer through the same loop as the checks, within
   `max_build_iterations`; the same blocker twice stops with `critic_no_progress`, the cap with
   `critic_cap`, and either opens a draft PR.

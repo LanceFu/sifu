@@ -1,6 +1,7 @@
 """The critic pass: citation checks, the feedback loop, PR notes and the limits on a critic."""
 
 import json
+import re
 import subprocess
 
 import pytest
@@ -10,6 +11,7 @@ pytest.importorskip("langgraph")
 from sifu import db  # noqa: E402
 from sifu.critic import (  # noqa: E402
     added_index,
+    build_view,
     check_citations,
     confirm_blocker,
     context_lines,
@@ -17,6 +19,7 @@ from sifu.critic import (  # noqa: E402
     render_diff,
     run_critic,
     to_implementer_findings,
+    view_from_index,
 )
 from sifu.graph import is_paused, run_ticket  # noqa: E402
 from sifu.implementer import ImplementerResult  # noqa: E402
@@ -119,37 +122,47 @@ def test_citations_must_point_at_added_lines_and_name_a_scenario():
     ]
 
 
-def test_the_diff_is_numbered_and_cut_at_the_limit():
-    index = added_index([("A.swift", 2, "a" * 50), ("B.swift", 1, "b" * 50)])
-    text, cut = render_diff(index, 80)
-    assert cut and "### A.swift\n2: " in text and "[diff cut here]" in text
-    assert render_diff(index, 10_000)[1] is False
+def test_the_diff_marks_added_and_context_rows_and_is_cut_at_the_limit():
+    view = {
+        "A.swift": {1: (" ", "x"), 2: ("+", "a" * 50), 9: (" ", "y")},
+        "B.swift": {1: ("+", "b" * 50)},
+    }
+    text, cut = render_diff(view, 10_000)
+    assert not cut
+    assert "   1  | x\n   2 +| " in text and "     ...\n   9  | y" in text
+    text, cut = render_diff(view, 80)
+    assert cut and "[diff cut here]" in text
 
 
-def test_blockers_on_one_line_merge_and_keep_every_message():
+def test_the_view_adds_unchanged_lines_from_the_file_but_citations_stay_on_added_lines(tmp_path):
+    (tmp_path / "A.swift").write_text("\n".join(f"line {n}" for n in range(1, 21)) + "\n")
+    index = {"A.swift": {10: "line 10"}}
+    view = build_view(tmp_path, index, 2)
+    assert sorted(view["A.swift"]) == [8, 9, 10, 11, 12]
+    assert view["A.swift"][10] == ("+", "line 10") and view["A.swift"][11] == (" ", "line 11")
+    assert view_from_index(index) == {"A.swift": {10: ("+", "line 10")}}
+    assert (
+        check_citations(
+            [LLMCriticFinding(**finding(file="A.swift", line=11, quote="line 11"))], index, 6
+        )[0]
+        == []
+    )
+
+
+def test_findings_on_one_line_merge_and_every_message_is_kept():
     group = [
-        {**finding("blocker"), "critic": "edge_cases", "message": "off by one"},
-        {**finding("blocker"), "critic": "contract", "message": "breaks criterion 1"},
-        {**finding("major", line=7), "critic": "contract"},
+        {**finding("major"), "critic": "edge_cases", "message": "range is exclusive"},
+        {**finding("blocker"), "critic": "contract", "message": "breaks criterion 2"},
+        {**finding("major", line=7), "critic": "security", "message": "elsewhere"},
     ]
     merged = merge_findings(group)
     assert len(merged) == 2
     top = next(f for f in merged if f["line"] == 2)
-    assert top["critic"] == "contract+edge_cases" and top["message"] == "off by one"
-    assert top["also"] == [{"critic": "contract", "message": "breaks criterion 1"}]
-
-
-def test_a_false_blocker_cannot_bury_a_real_major_on_the_same_line():
-    false_blocker = {**finding("blocker"), "critic": "contract", "message": "never appends"}
-    real_major = {**finding("major"), "critic": "security", "message": "logs coordinates"}
-    merged = merge_findings([false_blocker, real_major])
-    assert {(f["severity"], f["message"]) for f in merged} == {
-        ("blocker", "never appends"),
-        ("major", "logs coordinates"),
-    }
-    assert [f["message"] for f in to_implementer_findings(merged)] == [
-        "never appends Failing scenario: " + SCENARIO
-    ]
+    assert top["severity"] == "blocker" and top["critic"] == "contract+edge_cases"
+    assert top["message"] == "breaks criterion 2"
+    assert top["also"] == [{"critic": "edge_cases", "message": "range is exclusive"}]
+    sent = to_implementer_findings(merged)
+    assert len(sent) == 1 and "Also raised: (edge_cases) range is exclusive" in sent[0]["message"]
 
 
 def test_on_equal_severity_the_first_critics_message_is_kept():
@@ -176,6 +189,7 @@ def test_a_critic_that_never_answers_adds_nothing_and_is_marked_degraded():
         "security",
         spec_text="s",
         index=index,
+        view=view_from_index(index),
         checks="build",
         llm=FakeLLM({"Security Critic": "not json"}),
         model="m",
@@ -294,11 +308,11 @@ def test_every_example_cites_a_numbered_line_that_holds_its_quote(name):
         for row in ex["change"].splitlines():
             if row.startswith("### "):
                 current = row[4:]
-            elif ": " in row and row.split(": ", 1)[0].isdigit():
-                number, text = row.split(": ", 1)
-                numbered[(current, int(number))] = text
+            elif m := re.match(r"^\s*(\d+) ([+ ])\| (.*)$", row):
+                numbered[(current, int(m[1]))] = (m[2], m[3])
         for f in ex["output"]["findings"]:
-            text = numbered[(f["file"], f["line"])]
+            mark, text = numbered[(f["file"], f["line"])]
+            assert mark == "+"  # a finding cites an added line
             assert " ".join(f["quote"].split()) in " ".join(text.split())
             assert len(f["scenario"].split()) >= 6
 
@@ -308,22 +322,17 @@ def test_every_example_cites_a_numbered_line_that_holds_its_quote(name):
 
 REFUTED = json.dumps({"verdict": "refuted", "reason": "line 3 does it"})
 INDEX = added_index([(FILE, n, f"line {n}") for n in range(1, 30)])
+VIEW = view_from_index(INDEX)
 
 
-def test_the_checker_sees_only_the_lines_near_the_cited_one():
-    text = context_lines(INDEX, FILE, 10, 2)
-    assert text.splitlines() == [
-        "8: line 8",
-        "9: line 9",
-        "10: line 10",
-        "11: line 11",
-        "12: line 12",
-    ]
+def test_the_checker_sees_the_rows_near_the_cited_line():
+    text = context_lines(VIEW, FILE, 10, 2)
+    assert text.splitlines() == [f"{n:>4} +| line {n}" for n in range(8, 13)]
 
 
 def test_a_refuted_blocker_is_not_confirmed_and_a_dead_checker_keeps_it():
     f = {**finding(), "critic": "contract"}
-    kw = {"index": INDEX, "model": "m", "radius": 3}
+    kw = {"view": VIEW, "model": "m", "radius": 3}
     ok, reason, _ = confirm_blocker(f, llm=FakeLLM({"Claim Checker": REFUTED}), **kw)
     assert not ok and "line 3" in reason
     ok, reason, outcome = confirm_blocker(f, llm=FakeLLM({"Claim Checker": "garbage"}), **kw)
@@ -364,3 +373,21 @@ def test_only_blockers_are_checked_and_the_check_can_be_turned_off(
         make_deps, make_ticket, cfg, worktree, {"Edge Case Critic": reply(finding())}
     )
     assert not [c for c in llm.calls if c["key"] == "Claim Checker"]
+
+
+def test_critics_and_checker_are_shown_unchanged_lines_around_the_change(
+    conn, cfg, make_deps, make_ticket, worktree
+):
+    keep = "  func keep() { items.append(x) }\n"
+    (worktree / FILE).write_text("struct DayPlan {\n  func add() { }\n" + keep + "}\n")
+    git(worktree, "add", "-A")
+    git(worktree, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
+    new = "struct DayPlan {\n  func add() { if count > 10 { throw X } }\n" + keep + "}\n"
+    (worktree / FILE).write_text(new)
+    replies = {"Edge Case Critic": reply(finding())}
+    _, _, _, llm = run(make_deps, make_ticket, cfg, worktree, replies)
+    critic_prompt = next(c["user"] for c in llm.calls if c["key"] == "Edge Case Critic")
+    assert "   2 +|   func add() { if count > 10" in critic_prompt
+    assert "   3  |   func keep() { items.append(x) }" in critic_prompt  # unchanged: context
+    checker_prompt = next(c["user"] for c in llm.calls if c["key"] == "Claim Checker")
+    assert "   3  |   func keep() { items.append(x) }" in checker_prompt

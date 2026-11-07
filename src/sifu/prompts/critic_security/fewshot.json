@@ -1,6 +1,6 @@
 [
   {
-    "change": "### Sources/Sync.swift\n20: func upload(_ trip: Trip) async throws {\n21:     let url = URL(string: \"https://api.example.com/trips\")!\n22:     var request = URLRequest(url: url)\n23:     request.httpBody = try JSONEncoder().encode(trip)\n24:     _ = try await URLSession.shared.data(for: request)\n25: }",
+    "change": "### Sources/Sync.swift\n  20 +| func upload(_ trip: Trip) async throws {\n  21 +|     let url = URL(string: \"https://api.example.com/trips\")!\n  22 +|     var request = URLRequest(url: url)\n  23 +|     request.httpBody = try JSONEncoder().encode(trip)\n  24 +|     _ = try await URLSession.shared.data(for: request)\n  25 +| }",
     "output": {
       "findings": [
         {
@@ -16,7 +16,7 @@
     }
   },
   {
-    "change": "### Sources/Itinerary.swift\n9:     guard let first = names.first else { return \"Empty\" }",
+    "change": "### Sources/Itinerary.swift\n   9 +|     guard let first = names.first else { return \"Empty\" }",
     "output": {
       "findings": []
     }
