@@ -112,7 +112,7 @@ def test_citations_must_point_at_added_lines_and_name_a_scenario():
         index,
         6,
     )
-    assert kept == [good]
+    assert [k.model_dump(exclude={"moved_from"}) for k in kept] == [good.model_dump()]
     assert [why for _, why in dropped] == [
         "file not in the diff",
         "line was not added by the change",
@@ -391,3 +391,27 @@ def test_critics_and_checker_are_shown_unchanged_lines_around_the_change(
     assert "   3  |   func keep() { items.append(x) }" in critic_prompt  # unchanged: context
     checker_prompt = next(c["user"] for c in llm.calls if c["key"] == "Claim Checker")
     assert "   3  |   func keep() { items.append(x) }" in checker_prompt
+
+
+def test_a_citation_one_line_off_is_moved_to_the_line_holding_the_quote():
+    index = added_index(
+        [(FILE, 29, "/// Removes every Stop."), (FILE, 30, "public mutating func removeAll() {")]
+    )
+    near = LLMCriticFinding(**finding(line=29, quote="func removeAll"))
+    kept, dropped = check_citations([near], index, 6)
+    assert dropped == [] and kept[0].line == 30 and kept[0].moved_from == 29
+    exact = LLMCriticFinding(**finding(line=30, quote="func removeAll"))
+    assert check_citations([exact], index, 6)[0][0].moved_from is None
+
+
+def test_a_citation_is_only_moved_to_an_added_line_that_really_holds_the_quote():
+    index = added_index([(FILE, 10, "alpha"), (FILE, 13, "target line")])
+    context_only = {FILE: {5: "target line"}}
+    far = LLMCriticFinding(**finding(line=10, quote="target line"))  # three lines away
+    assert check_citations([far], index, 6)[0] == []
+    missing = LLMCriticFinding(**finding(line=10, quote="not anywhere"))
+    kept, dropped = check_citations([missing], index, 6)
+    assert kept == [] and dropped[0][1] == "quote is not on the cited line"
+    assert check_citations([far], context_only, 6, radius=9)[0][0].line == 5  # added rows only
+    unrelated = LLMCriticFinding(**finding(line=99, quote="target line", scenario=SCENARIO))
+    assert check_citations([unrelated], index, 6)[0] == []  # too far from 99

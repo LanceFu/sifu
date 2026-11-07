@@ -61,7 +61,8 @@ def main() -> None:
         for f in report.kept:
             print("  KEEP", json.dumps(f))
         for f in report.dropped:
-            print("  DROP", f["why"], "|", f["file"], f["line"], f["message"][:80])
+            print("  DROP", f["why"], "|", f["file"], f["line"], "| quote:", repr(f["quote"]))
+            print("       ", f["message"][:100])
 
     if cfg.critic.confirm_blockers:
         checker = cfg.critic.confirm_model or cfg.models.author

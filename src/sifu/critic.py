@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sifu.llm import LLM, StructuredOutcome, structured_call
-from sifu.models import ConfirmOutput, CriticOutput, LLMCriticFinding
+from sifu.models import CheckedFinding, ConfirmOutput, CriticOutput, LLMCriticFinding
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 FOLDERS = {
@@ -128,22 +128,52 @@ def _squash(text: str) -> str:
     return " ".join(text.split())
 
 
+def _nearest_line(rows: dict[int, str], line: int, quote: str, radius: int) -> int | None:
+    """The closest added line within ``radius`` of ``line`` holding the quote (lower wins a tie)."""
+    for distance in range(1, radius + 1):
+        for candidate in (line - distance, line + distance):
+            if candidate in rows and quote in _squash(rows[candidate]):
+                return candidate
+    return None
+
+
 def check_citations(
-    findings: list[LLMCriticFinding], index: dict[str, dict[int, str]], min_words: int
-) -> tuple[list[LLMCriticFinding], list[tuple[LLMCriticFinding, str]]]:
-    """Keep findings that cite an added line and give a real scenario; say why the rest go."""
-    kept, dropped = [], []
+    findings: list[LLMCriticFinding],
+    index: dict[str, dict[int, str]],
+    min_words: int,
+    radius: int = 2,
+) -> tuple[list[CheckedFinding], list[tuple[LLMCriticFinding, str]]]:
+    """Keep findings that cite an added line and give a real scenario; say why the rest go.
+
+    A model often points one line off, at the comment above a method or the brace below it. If the
+    quote is not on the cited line but is real text on an added line within ``radius`` lines, the
+    finding is moved there. The quote must still exist on an added line, so nothing is invented.
+    """
+    kept: list[CheckedFinding] = []
+    dropped: list[tuple[LLMCriticFinding, str]] = []
     for f in findings:
         if f.file not in index:
             dropped.append((f, "file not in the diff"))
-        elif f.line not in index[f.file]:
-            dropped.append((f, "line was not added by the change"))
-        elif not f.quote.strip() or _squash(f.quote) not in _squash(index[f.file][f.line]):
+            continue
+        rows, quote, line, moved = index[f.file], _squash(f.quote), f.line, None
+        if not quote:
             dropped.append((f, "quote is not on the cited line"))
-        elif len(f.scenario.split()) < min_words:
+            continue
+        if line not in rows or quote not in _squash(rows[line]):
+            near = _nearest_line(rows, line, quote, radius)
+            if near is None:
+                why = (
+                    "line was not added by the change"
+                    if line not in rows
+                    else "quote is not on the cited line"
+                )
+                dropped.append((f, why))
+                continue
+            moved, line = f.line, near
+        if len(f.scenario.split()) < min_words:
             dropped.append((f, "no concrete failing scenario"))
-        else:
-            kept.append(f)
+            continue
+        kept.append(CheckedFinding(**{**f.model_dump(), "line": line, "moved_from": moved}))
     return kept, dropped
 
 

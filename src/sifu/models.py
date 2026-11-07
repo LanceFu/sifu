@@ -167,3 +167,9 @@ class ConfirmOutput(BaseModel):
 
     verdict: Literal["confirmed", "refuted"] = "confirmed"
     reason: str = ""
+
+
+class CheckedFinding(LLMCriticFinding):
+    """A critic finding after the citation check; ``moved_from`` is the line before a correction."""
+
+    moved_from: int | None = None
