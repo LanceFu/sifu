@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sifu.llm import LLM, StructuredOutcome, structured_call
-from sifu.models import CriticOutput, LLMCriticFinding
+from sifu.models import ConfirmOutput, CriticOutput, LLMCriticFinding
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 FOLDERS = {
@@ -144,20 +144,84 @@ _RANK = {"minor": 0, "major": 1, "blocker": 2}
 
 
 def merge_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """One finding per file and line: the highest severity wins and every critic is named.
+    """Merge findings that sit on the same file and line and are on the same side of blocking.
 
-    On a tie in severity the finding that came first wins, so the order of ``critic.names``
-    decides whose message is kept.
+    A blocker is never merged with a lower severity, so a false blocker cannot bury a real major
+    finding. Inside a group the highest severity gives the headline (the first one on a tie, so the
+    order of ``critic.names`` decides) and every other distinct message is kept under ``also``.
     """
-    groups: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, int, bool], list[dict[str, Any]]] = {}
     for f in kept:
-        groups.setdefault((f["file"], f["line"]), []).append(f)
+        groups.setdefault((f["file"], f["line"], f["severity"] == "blocker"), []).append(f)
     merged = []
     for group in groups.values():
         top = max(group, key=lambda f: _RANK[f["severity"]])
+        also = [
+            {"critic": f["critic"], "message": f["message"]}
+            for f in group
+            if f is not top and f["message"] != top["message"]
+        ]
         critics = sorted({f["critic"] for f in group})
-        merged.append({**top, "critic": "+".join(critics)})
+        merged.append({**top, "critic": "+".join(critics), "also": also})
     return merged
+
+
+def context_lines(index: dict[str, dict[int, str]], file: str, line: int, radius: int) -> str:
+    """The added lines within ``radius`` of the cited line, numbered."""
+    rows = sorted((n, t) for n, t in index.get(file, {}).items() if abs(n - line) <= radius)
+    return "\n".join(f"{n}: {t}" for n, t in rows)
+
+
+def load_confirm(prompts_dir: Path = PROMPTS_DIR) -> str:
+    folder = prompts_dir / "critic_confirm"
+    persona = (folder / "persona.md").read_text(encoding="utf-8").strip()
+    examples = json.loads((folder / "fewshot.json").read_text(encoding="utf-8"))
+    shots = "\n\n".join(
+        f"Example {i}\n<claim>\n{ex['claim']}\nCited: {ex['cited']} (quote: {ex['quote']})\n"
+        f"</claim>\n<lines>\n{ex['lines']}\n</lines>\nAnswer:\n{json.dumps(ex['output'])}"
+        for i, ex in enumerate(examples, start=1)
+    )
+    return f"{persona}\n\n## Examples\n{shots}"
+
+
+def confirm_blocker(
+    finding: dict[str, Any],
+    *,
+    index: dict[str, dict[int, str]],
+    llm: LLM,
+    model: str,
+    radius: int,
+    prompts_dir: Path = PROMPTS_DIR,
+) -> tuple[bool, str, StructuredOutcome[ConfirmOutput]]:
+    """Ask a second model whether the lines around a blocker support it.
+
+    Returns (confirmed, reason, outcome). If the model gives no valid answer the blocker stands:
+    a real blocker must not be lost because the checker was down.
+    """
+    lines = context_lines(index, finding["file"], finding["line"], radius)
+    user = (
+        f"{UNTRUSTED_NOTE}\n\n<claim>\n{finding['message']}\n"
+        f"Failing scenario given: {finding['scenario']}\n"
+        f"Cited: {finding['file']}:{finding['line']} (quote: {finding['quote']})\n</claim>\n\n"
+        f"<lines>\n{lines}\n</lines>"
+    )
+    outcome = structured_call(
+        llm,
+        model=model,
+        system=load_confirm(prompts_dir),
+        user=user,
+        schema_model=ConfirmOutput,
+        fallback=ConfirmOutput,
+    )
+    if not outcome.ok:
+        return True, "checker gave no valid answer; the blocker stands", outcome
+    return outcome.value.verdict == "confirmed", outcome.value.reason, outcome
+
+
+def _with_also(message: str, also: list[dict[str, str]]) -> str:
+    if not also:
+        return message
+    return message + " Also raised: " + " ".join(f"({a['critic']}) {a['message']}" for a in also)
 
 
 def to_implementer_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -165,7 +229,8 @@ def to_implementer_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "source": f"critic:{f['critic']}",
-            "message": f"{f['message']} Failing scenario: {f['scenario']}",
+            "message": f"{_with_also(f['message'], f.get('also', []))} "
+            f"Failing scenario: {f['scenario']}",
             "file": f["file"],
             "line": f["line"],
             "rule": f["category"],
@@ -178,8 +243,8 @@ def to_implementer_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def render_pr_comment(notes: list[dict[str, Any]], degraded: list[str]) -> str:
     """The comment for findings that do not block: major and minor, each with its scenario."""
     lines = [
-        f"- **{f['severity']}** ({f['critic']}) `{f['file']}:{f['line']}` {f['message']} "
-        f"Scenario: {f['scenario']}"
+        f"- **{f['severity']}** ({f['critic']}) `{f['file']}:{f['line']}` "
+        f"{_with_also(f['message'], f.get('also', []))} Scenario: {f['scenario']}"
         for f in notes
     ]
     if degraded:

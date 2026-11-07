@@ -68,6 +68,9 @@ class CriticConfig(BaseModel):
     enabled: bool = False
     max_diff_chars: int = 24_000
     min_scenario_words: int = 6
+    confirm_blockers: bool = True  # a second model re-reads each blocker against nearby lines
+    confirm_model: str | None = None  # None: models.author, a different family from the critics
+    context_lines: int = 6
     names: list[str] = ["edge_cases", "contract", "security"]
 
 

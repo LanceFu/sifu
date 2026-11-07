@@ -16,6 +16,7 @@ from pathlib import Path
 from sifu.config import load_config
 from sifu.critic import (
     added_index,
+    confirm_blocker,
     merge_findings,
     run_critic,
     to_implementer_findings,
@@ -58,8 +59,30 @@ def main() -> None:
         for f in report.dropped:
             print("  DROP", f["why"], "|", f["file"], f["line"], f["message"][:80])
 
+    if cfg.critic.confirm_blockers:
+        checker = cfg.critic.confirm_model or cfg.models.author
+        print(f"\n== confirmation of blockers by {checker}")
+        survivors = []
+        for f in all_kept:
+            if f["severity"] != "blocker":
+                survivors.append(f)
+                continue
+            ok, reason, _ = confirm_blocker(
+                f,
+                index=index,
+                llm=llm,
+                model=checker,
+                radius=cfg.critic.context_lines,
+            )
+            print(
+                f"  {'CONFIRMED' if ok else 'REFUTED  '} {f['critic']} "
+                f"{f['file']}:{f['line']} | {reason}"
+            )
+            if ok:
+                survivors.append(f)
+        all_kept = survivors
     merged = merge_findings(all_kept)
-    print(f"\n== after merging: {len(all_kept)} findings became {len(merged)}")
+    print(f"\n== after confirming and merging: {len(all_kept)} findings became {len(merged)}")
     for f in merged:
         print(f"  {f['severity']:7} {f['critic']} {f['file']}:{f['line']} {f['message'][:90]}")
     print("\n== sent back to the implementer (blockers only):")

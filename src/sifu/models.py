@@ -160,3 +160,10 @@ class CriticOutput(BaseModel):
     """The JSON a critic model must return."""
 
     findings: list[LLMCriticFinding] = Field(default_factory=list)
+
+
+class ConfirmOutput(BaseModel):
+    """A second look at one blocker: do the cited lines support the claim?"""
+
+    verdict: Literal["confirmed", "refuted"] = "confirmed"
+    reason: str = ""

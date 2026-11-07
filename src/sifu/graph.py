@@ -734,8 +734,39 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
 
         with ThreadPoolExecutor(max_workers=len(cfg.critic.names)) as pool:
             reports = list(pool.map(one, cfg.critic.names))
-        kept = critic_pass.merge_findings([f for r in reports for f in r.kept])
+        kept = [f for r in reports for f in r.kept]
         dropped = [f for r in reports for f in r.dropped]
+        if cfg.critic.confirm_blockers:
+            checker = cfg.critic.confirm_model or cfg.models.author
+
+            def confirm(f: dict[str, Any]):
+                deps.check_budget(tid)
+                ok, reason, outcome = critic_pass.confirm_blocker(
+                    f,
+                    index=index,
+                    llm=deps.llm,
+                    model=checker,
+                    radius=cfg.critic.context_lines,
+                    prompts_dir=prompts_dir,
+                )
+                deps.log_run(tid, "critic:confirm", checker, outcome)
+                return ok, reason
+
+            blockers_in = [f for f in kept if f["severity"] == "blocker"]
+            with ThreadPoolExecutor(max_workers=max(len(blockers_in), 1)) as pool:
+                verdicts = list(pool.map(confirm, blockers_in))
+            refuted = {
+                id(f): reason
+                for f, (ok, reason) in zip(blockers_in, verdicts, strict=True)
+                if not ok
+            }
+            dropped += [
+                {**f, "why": f"refuted on confirmation: {refuted[id(f)]}"}
+                for f in kept
+                if id(f) in refuted
+            ]
+            kept = [f for f in kept if id(f) not in refuted]
+        kept = critic_pass.merge_findings(kept)
         degraded = [r.critic for r in reports if r.degraded]
         deps.log(
             tid,

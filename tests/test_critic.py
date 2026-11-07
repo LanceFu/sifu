@@ -11,6 +11,8 @@ from sifu import db  # noqa: E402
 from sifu.critic import (  # noqa: E402
     added_index,
     check_citations,
+    confirm_blocker,
+    context_lines,
     merge_findings,
     render_diff,
     run_critic,
@@ -124,17 +126,30 @@ def test_the_diff_is_numbered_and_cut_at_the_limit():
     assert render_diff(index, 10_000)[1] is False
 
 
-def test_one_bug_reported_by_three_critics_becomes_one_finding():
+def test_blockers_on_one_line_merge_and_keep_every_message():
     group = [
-        {**finding("minor"), "critic": "security"},
-        {**finding("blocker"), "critic": "edge_cases"},
-        {**finding("major"), "critic": "contract"},
+        {**finding("blocker"), "critic": "edge_cases", "message": "off by one"},
+        {**finding("blocker"), "critic": "contract", "message": "breaks criterion 1"},
         {**finding("major", line=7), "critic": "contract"},
     ]
     merged = merge_findings(group)
     assert len(merged) == 2
     top = next(f for f in merged if f["line"] == 2)
-    assert top["severity"] == "blocker" and top["critic"] == "contract+edge_cases+security"
+    assert top["critic"] == "contract+edge_cases" and top["message"] == "off by one"
+    assert top["also"] == [{"critic": "contract", "message": "breaks criterion 1"}]
+
+
+def test_a_false_blocker_cannot_bury_a_real_major_on_the_same_line():
+    false_blocker = {**finding("blocker"), "critic": "contract", "message": "never appends"}
+    real_major = {**finding("major"), "critic": "security", "message": "logs coordinates"}
+    merged = merge_findings([false_blocker, real_major])
+    assert {(f["severity"], f["message"]) for f in merged} == {
+        ("blocker", "never appends"),
+        ("major", "logs coordinates"),
+    }
+    assert [f["message"] for f in to_implementer_findings(merged)] == [
+        "never appends Failing scenario: " + SCENARIO
+    ]
 
 
 def test_on_equal_severity_the_first_critics_message_is_kept():
@@ -286,3 +301,66 @@ def test_every_example_cites_a_numbered_line_that_holds_its_quote(name):
             text = numbered[(f["file"], f["line"])]
             assert " ".join(f["quote"].split()) in " ".join(text.split())
             assert len(f["scenario"].split()) >= 6
+
+
+# ---- the confirmation pass --------------------------------------------------------------
+
+
+REFUTED = json.dumps({"verdict": "refuted", "reason": "line 3 does it"})
+INDEX = added_index([(FILE, n, f"line {n}") for n in range(1, 30)])
+
+
+def test_the_checker_sees_only_the_lines_near_the_cited_one():
+    text = context_lines(INDEX, FILE, 10, 2)
+    assert text.splitlines() == [
+        "8: line 8",
+        "9: line 9",
+        "10: line 10",
+        "11: line 11",
+        "12: line 12",
+    ]
+
+
+def test_a_refuted_blocker_is_not_confirmed_and_a_dead_checker_keeps_it():
+    f = {**finding(), "critic": "contract"}
+    kw = {"index": INDEX, "model": "m", "radius": 3}
+    ok, reason, _ = confirm_blocker(f, llm=FakeLLM({"Claim Checker": REFUTED}), **kw)
+    assert not ok and "line 3" in reason
+    ok, reason, outcome = confirm_blocker(f, llm=FakeLLM({"Claim Checker": "garbage"}), **kw)
+    assert ok and not outcome.ok and "stands" in reason
+
+
+def test_a_refuted_blocker_is_dropped_and_never_reaches_the_implementer(
+    conn, cfg, make_deps, make_ticket, worktree
+):
+    replies = {"Contract Critic": reply(finding()), "Claim Checker": REFUTED}
+    deps, ticket, state, llm = run(make_deps, make_ticket, cfg, worktree, replies)
+    assert state["status"] == "done" and len(deps.implementer.calls) == 1
+    event = [e for e in db.list_events(conn, ticket) if e["kind"] == "critic_result"][-1]
+    payload = json.loads(event["payload"])
+    assert payload["kept"] == []
+    assert payload["dropped"][0]["why"].startswith("refuted on confirmation")
+    checker_calls = [c for c in llm.calls if c["key"] == "Claim Checker"]
+    assert [c["model"] for c in checker_calls] == [cfg.models.author]  # not the critics' model
+
+
+def test_a_confirmed_blocker_still_goes_back_to_the_implementer(
+    conn, cfg, make_deps, make_ticket, worktree
+):
+    replies = {"Edge Case Critic": [reply(finding()), reply()]}
+    deps, _, state, llm = run(make_deps, make_ticket, cfg, worktree, replies)
+    assert len(deps.implementer.calls) == 2
+    assert len([c for c in llm.calls if c["key"] == "Claim Checker"]) == 1
+
+
+def test_only_blockers_are_checked_and_the_check_can_be_turned_off(
+    conn, cfg, make_deps, make_ticket, worktree
+):
+    replies = {"Security Critic": reply(finding("major"), finding("minor", line=3, quote="}"))}
+    _, _, _, llm = run(make_deps, make_ticket, cfg, worktree, replies)
+    assert not [c for c in llm.calls if c["key"] == "Claim Checker"]
+    cfg.critic.confirm_blockers = False
+    deps, _, _, llm = run(
+        make_deps, make_ticket, cfg, worktree, {"Edge Case Critic": reply(finding())}
+    )
+    assert not [c for c in llm.calls if c["key"] == "Claim Checker"]

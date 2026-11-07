@@ -165,6 +165,12 @@ rubric and few-shot examples (`prompts/critic_*`). A critic can add findings but
 
 - Every finding must cite a line the change added and give a concrete failing scenario. Code drops
   the rest (`critic_result` events list kept and dropped findings with the reason).
+- Each blocker gets a second look before it counts: a Claim Checker prompt on `models.author` (a
+  different family from the critics, or `critic.confirm_model`) sees the claim and the added lines
+  around it and may refute it. Refuted blockers are dropped and logged; if the checker gives no valid
+  answer the blocker stands. Only blockers are checked, so the cost is one call per blocker.
+- Findings on the same line are merged only on the same side of blocking, and every distinct message
+  is kept (`also`), so a false blocker cannot hide a real major finding.
 - Blockers go back to the implementer through the same loop as the checks, within
   `max_build_iterations`; the same blocker twice stops with `critic_no_progress`, the cap with
   `critic_cap`, and either opens a draft PR.

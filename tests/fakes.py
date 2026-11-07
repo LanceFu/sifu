@@ -18,6 +18,7 @@ SPEC = json.dumps(
 
 
 CRITIC_CLEAN = json.dumps({"findings": []})
+CONFIRMED = json.dumps({"verdict": "confirmed", "reason": "the line shows it"})
 
 PLAN = json.dumps(
     {
@@ -36,6 +37,7 @@ class FakeLLM:
     def __init__(self, replies: dict[str, str | list[str]] | None = None) -> None:
         # the critic personas are checked first: their examples mention TripPlannerCore
         self.replies = {
+            "Claim Checker": CONFIRMED,
             "Edge Case Critic": CRITIC_CLEAN,
             "Contract Critic": CRITIC_CLEAN,
             "Security Critic": CRITIC_CLEAN,
