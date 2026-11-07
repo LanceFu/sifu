@@ -144,7 +144,11 @@ _RANK = {"minor": 0, "major": 1, "blocker": 2}
 
 
 def merge_findings(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """One finding per file and line: the highest severity wins and every critic is named."""
+    """One finding per file and line: the highest severity wins and every critic is named.
+
+    On a tie in severity the finding that came first wins, so the order of ``critic.names``
+    decides whose message is kept.
+    """
     groups: dict[tuple[str, int], list[dict[str, Any]]] = {}
     for f in kept:
         groups.setdefault((f["file"], f["line"]), []).append(f)

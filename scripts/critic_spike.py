@@ -14,7 +14,12 @@ import json
 from pathlib import Path
 
 from sifu.config import load_config
-from sifu.critic import added_index, run_critic
+from sifu.critic import (
+    added_index,
+    merge_findings,
+    run_critic,
+    to_implementer_findings,
+)
 from sifu.llm import OllamaLLM
 from sifu.verify import added_lines
 
@@ -30,6 +35,7 @@ def main() -> None:
     llm = OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
     index = added_index(added_lines(Path(args.worktree).expanduser()))
     spec = Path(args.spec).expanduser().read_text(encoding="utf-8")
+    all_kept = []
     for name in cfg.critic.names:
         report, outcome = run_critic(
             name,
@@ -46,10 +52,23 @@ def main() -> None:
             f"degraded={report.degraded}, attempts={outcome.attempts}, "
             f"tokens={outcome.prompt_tokens}+{outcome.completion_tokens}"
         )
+        all_kept.extend(report.kept)
         for f in report.kept:
             print("  KEEP", json.dumps(f))
         for f in report.dropped:
             print("  DROP", f["why"], "|", f["file"], f["line"], f["message"][:80])
+
+    merged = merge_findings(all_kept)
+    print(f"\n== after merging: {len(all_kept)} findings became {len(merged)}")
+    for f in merged:
+        print(f"  {f['severity']:7} {f['critic']} {f['file']}:{f['line']} {f['message'][:90]}")
+    print("\n== sent back to the implementer (blockers only):")
+    for f in to_implementer_findings(merged):
+        print("  ", json.dumps(f))
+    print("== posted as a PR comment (major and minor):")
+    for f in merged:
+        if f["severity"] != "blocker":
+            print(f"   {f['severity']} {f['critic']} {f['file']}:{f['line']}")
 
 
 if __name__ == "__main__":

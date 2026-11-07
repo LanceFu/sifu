@@ -137,6 +137,14 @@ def test_one_bug_reported_by_three_critics_becomes_one_finding():
     assert top["severity"] == "blocker" and top["critic"] == "contract+edge_cases+security"
 
 
+def test_on_equal_severity_the_first_critics_message_is_kept():
+    first = {**finding("major"), "critic": "edge_cases", "message": "first"}
+    second = {**finding("major"), "critic": "contract", "message": "second"}
+    merged = merge_findings([first, second])
+    assert len(merged) == 1 and merged[0]["message"] == "first"
+    assert merged[0]["critic"] == "contract+edge_cases"
+
+
 def test_only_blockers_go_back_to_the_implementer():
     kept = [
         {**finding("blocker"), "critic": "contract"},
