@@ -33,7 +33,7 @@ implementer:
     - "Bash(git commit:*)"
 
 planner:
-  enabled: false            # true: write plan.md after the spec is accepted and gate Build on it
+  enabled: true            # true: write plan.md after the spec is accepted and gate Build on it
   listing_cap: 150
   excerpt_chars: 3000
   total_chars: 15000
