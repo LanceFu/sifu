@@ -26,7 +26,9 @@ def ctx():
 
 @pytest.fixture()
 def cfg():
-    return load_config(ROOT / "config.yaml")
+    config = load_config(ROOT / "config.yaml")
+    config.planner.enabled = False  # tests opt in; config.yaml decides the live default
+    return config
 
 
 @pytest.fixture()
