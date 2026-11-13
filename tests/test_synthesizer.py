@@ -3,6 +3,7 @@ from sifu.synthesizer import (
     build_questions,
     decide,
     fallback_spec,
+    render_intent_md,
     render_spec_md,
     write_artifact,
 )
@@ -102,7 +103,30 @@ def test_spec_markdown_lists_criteria_and_notes(tmp_path):
         requirement_refs=["REQ-2"],
     )
     text = render_spec_md(7, spec, [finding("glossary", "minor", "Use Traveller")])
-    assert (
-        "ticket: 7" in text and "1. Given a" in text and "[minor] glossary: Use Traveller" in text
-    )
+    assert "id: TP-0007" in text and "# Spec: T" in text
+    assert "| T1 | AC-1 | Given a |" in text and "| T2 | AC-2 | Given b |" in text
+    assert "[minor] glossary: Use Traveller" in text and "| REQ-2 |" in text
     assert write_artifact(tmp_path, 7, "spec.md", text).read_text() == text
+
+
+def test_spec_flags_protected_paths_and_lists_assumptions():
+    spec = Spec(
+        title="T",
+        summary="S",
+        acceptance_criteria=["Given a"],
+        affected_paths=[".github/workflows/ci.yml", "Sources/Trip.swift"],
+        assumptions=["Names are trimmed"],
+    )
+    text = render_spec_md(1, spec, [], protected_paths=[".github/"], intent_text="x")
+    assert "| `.github/workflows/ci.yml` | yes |" in text
+    assert "| `Sources/Trip.swift` | no |" in text
+    assert "- Names are trimmed" in text and "intent_hash:" in text
+
+
+def test_intent_markdown_keeps_body_verbatim_and_finds_requirements():
+    text = render_intent_md(
+        3, 'Fix: "name"', "Given a, Then b (REQ-1)", repo="r", created="2026-11-13 20:00:00"
+    )
+    assert "id: TP-0003" in text and "date: 2026-11-13" in text and "requirements: [REQ-1]" in text
+    assert 'title: "Fix: \\"name\\""' in text
+    assert text.rstrip().endswith("Given a, Then b (REQ-1)")

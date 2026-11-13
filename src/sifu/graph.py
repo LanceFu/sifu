@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
@@ -55,6 +56,7 @@ from sifu.synthesizer import (
     build_questions,
     decide,
     draft_spec,
+    render_intent_md,
     render_questions_md,
     render_spec_md,
     write_artifact,
@@ -200,6 +202,11 @@ def sqlite_checkpointer(path: str) -> SqliteSaver:
     return SqliteSaver(sqlite3.connect(path, check_same_thread=False))
 
 
+def _repo_name(cfg) -> str:
+    """The product repo's short name, e.g. ``tripplanner-ios``."""
+    return cfg.github.repo.rsplit("/", 1)[-1]
+
+
 def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - one flat node list
     """Compile the ticket graph for the given dependencies."""
     cfg = deps.cfg
@@ -209,7 +216,16 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         ticket = deps.tool("supervisor", "get_ticket", log_for=tid, ticket_id=tid)
         deps.log(tid, "design_started", "supervisor", {"title": ticket["title"]})
         write_artifact(
-            deps.artifacts_dir, tid, "intent.md", f"# {ticket['title']}\n\n{ticket['body']}\n"
+            deps.artifacts_dir,
+            tid,
+            "intent.md",
+            render_intent_md(
+                tid,
+                ticket["title"],
+                ticket["body"],
+                repo=_repo_name(cfg),
+                created=str(ticket.get("created_at", "")),
+            ),
         )
         return {
             "title": ticket["title"],
@@ -298,8 +314,20 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
                 message="No Given / When / Then acceptance criteria could be written.",
             )
             return _raise_questions(tid, [], Outcome("questions", [blocker], outcome.notes))
+        intent_file = Path(deps.artifacts_dir) / str(tid) / "intent.md"
         path = write_artifact(
-            deps.artifacts_dir, tid, "spec.md", render_spec_md(tid, spec, outcome.notes)
+            deps.artifacts_dir,
+            tid,
+            "spec.md",
+            render_spec_md(
+                tid,
+                spec,
+                outcome.notes,
+                repo=_repo_name(cfg),
+                intent_text=intent_file.read_text(encoding="utf-8") if intent_file.exists() else "",
+                protected_paths=cfg.router.protected_paths,
+                today=datetime.now(timezone.utc).date().isoformat(),
+            ),
         )
         deps.log(tid, "agent_output", "synthesizer", {"spec": spec.model_dump(), "path": str(path)})
         deps.move(tid, TicketStatus.SPEC)

@@ -113,6 +113,8 @@ class Spec(BaseModel):
     requirement_refs: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
     affected_paths: list[str] = Field(default_factory=list)
+    design: list[str] = Field(default_factory=list)  # decisions and why, one per line
+    assumptions: list[str] = Field(default_factory=list)  # things the writer had to assume
 
 
 class Plan(BaseModel):
