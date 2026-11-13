@@ -46,6 +46,8 @@ def open_live(merge_mode: str, planner: bool = False, db_path: str = DB):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--key", default="clean", help="seed ticket key (default: clean)")
+    parser.add_argument("--title", help="use this ticket title instead of the seed ticket's")
+    parser.add_argument("--body", help="use this ticket body instead of the seed ticket's")
     parser.add_argument("--merge-mode", default="manual", choices=["manual", "risk_based", "auto"])
     parser.add_argument(
         "--planner", action="store_true", help="write and gate on plan.md (planner.enabled)"
@@ -58,7 +60,8 @@ def main() -> None:
         answer_request(deps, int(args.answer[0]), args.answer[1])
         return
     seed = next(s for s in load_seed_tickets() if s["key"] == args.key)
-    ticket_id = db.create_ticket(deps.conn, project_id, seed["title"], seed["body"])
+    title, body = args.title or seed["title"], args.body or seed["body"]
+    ticket_id = db.create_ticket(deps.conn, project_id, title, body)
     # without the planner there is no plan to accept, so the gate is opened up front
     facts = {} if args.planner else {"plan_accepted": True}
     state = run_ticket(deps, ticket_id, facts=facts)
