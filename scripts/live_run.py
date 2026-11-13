@@ -34,7 +34,9 @@ def open_live(merge_mode: str, planner: bool = False, db_path: str = DB):
     cfg.planner.enabled = planner
     deps, project_id = open_demo(cfg, db_path=db_path)
     token = get_github_token(cfg.github)  # a SecretStr; never printed
-    deps.implementer = Implementer(cfg)
+    # ticket ids restart in every database, so a database other than the default tags its branches
+    tag = None if Path(db_path).resolve() == Path(DB).resolve() else Path(db_path).stem
+    deps.implementer = Implementer(cfg, tag=tag)
     deps.verifier = Verifier(cfg)
     deps.github = GitHubClient.from_config(cfg.github)
     deps.publisher = lambda worktree, branch, message: publish_branch(
