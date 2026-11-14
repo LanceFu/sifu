@@ -15,6 +15,9 @@ BACKEND_ENV = "SIFU_IMPLEMENTER_BACKEND"
 class OllamaConfig(BaseModel):
     base_url: str = "http://localhost:11434"
     num_ctx: int = 65536
+    # most output tokens per reply, thinking included: a reasoning model can loop until the
+    # context fills (one critic reply reached 500k+ tokens across retries without a cap)
+    num_predict: int = Field(default=8192, gt=0)
 
 
 class ModelsConfig(BaseModel):

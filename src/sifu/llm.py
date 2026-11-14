@@ -16,6 +16,8 @@ from typing import Any, Generic, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from sifu.config import OllamaConfig
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -39,10 +41,17 @@ class LLM(Protocol):
 class OllamaLLM:
     """Chat with a local Ollama model through langchain-ollama (imported lazily)."""
 
-    def __init__(self, base_url: str, num_ctx: int, temperature: float = 0.0) -> None:
+    def __init__(
+        self, base_url: str, num_ctx: int, temperature: float = 0.0, num_predict: int = 8192
+    ) -> None:
         self.base_url = base_url
         self.num_ctx = num_ctx
         self.temperature = temperature
+        self.num_predict = num_predict
+
+    @classmethod
+    def from_config(cls, cfg: OllamaConfig) -> OllamaLLM:
+        return cls(cfg.base_url, cfg.num_ctx, num_predict=cfg.num_predict)
 
     def complete(
         self, *, model: str, system: str, user: str, schema: dict[str, Any] | None = None
@@ -54,6 +63,7 @@ class OllamaLLM:
             base_url=self.base_url,
             num_ctx=self.num_ctx,
             temperature=self.temperature,
+            num_predict=self.num_predict,  # a reply that hits it fails to parse and is retried
             format=schema,
         )
         reply = chat.invoke([("system", system), ("user", user)])

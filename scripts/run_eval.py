@@ -64,7 +64,7 @@ def main() -> None:
         print("\n".join(problems) if problems else "labels agree with the deterministic code")
         raise SystemExit(1 if problems else 0)
 
-    llm = OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
+    llm = OllamaLLM.from_config(cfg.ollama)
     start = {"sifu": git_stamp(ROOT), "product": git_stamp(repo)}
     per_system = {}
     if args.system in ("swarm", "both"):

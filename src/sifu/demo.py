@@ -37,7 +37,7 @@ def open_demo(
 ) -> tuple[Deps, int]:
     """Build the dependencies and the TripPlanner project. A file path keeps pauses on disk."""
     cfg = cfg or load_config(ROOT / "config.yaml")
-    llm = llm or OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
+    llm = llm or OllamaLLM.from_config(cfg.ollama)
     repo = Path(cfg.workspace.product_repo_path).expanduser()
     conn = db.connect(db_path)
     db.init_db(conn)

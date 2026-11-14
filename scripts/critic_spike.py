@@ -34,7 +34,7 @@ def main() -> None:
     parser.add_argument("--spec", required=True, help="path to the ticket's spec.md")
     args = parser.parse_args()
     cfg = load_config(ROOT / "config.yaml")
-    llm = OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
+    llm = OllamaLLM.from_config(cfg.ollama)
     worktree = Path(args.worktree).expanduser()
     index = added_index(added_lines(worktree))
     view = build_view(worktree, index, cfg.critic.context_lines)

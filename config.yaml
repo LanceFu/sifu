@@ -4,6 +4,7 @@
 ollama:
   base_url: http://localhost:11434
   num_ctx: 65536            # Claude Code needs 64K+ when the implementer runs locally
+  num_predict: 8192         # output cap per reply, thinking included; stops a looping model
 
 models:
   author: "qwen3.8:27b-mlx"           # intent / spec / plan modes

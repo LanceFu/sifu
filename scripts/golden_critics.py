@@ -50,7 +50,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     cfg = load_config(ROOT / "config.yaml")
-    llm = OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
+    llm = OllamaLLM.from_config(cfg.ollama)
     product = Path(cfg.workspace.product_repo_path).expanduser()
     checker = cfg.critic.confirm_model or cfg.models.author
     start = {"sifu": git_stamp(ROOT), "product": git_stamp(product)}
