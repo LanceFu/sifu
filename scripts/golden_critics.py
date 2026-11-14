@@ -77,7 +77,8 @@ def main() -> None:
         )
         for flaw_id, ok in score.detected.items():
             lane = "" if score.by_expected_critic[flaw_id] else "  (found by another critic)"
-            print(f"  {'FOUND  ' if ok else 'MISSED '} {flaw_id}{lane if ok else ''}")
+            near = "" if score.detected_exact[flaw_id] else "  (only within the line window)"
+            print(f"  {'FOUND  ' if ok else 'MISSED '} {flaw_id}{lane + near if ok else ''}")
         for fp in score.false_positives:
             print(
                 f"  FALSE+  {fp['severity']:7} {fp['critic']} {fp['file']}:{fp['line']} "

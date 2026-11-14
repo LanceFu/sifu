@@ -213,7 +213,7 @@ and seconds per ticket. In a notebook: `sifu.evalrun.load_results(path)` and
 `sifu.evalset.format_markdown(results["summaries"])`.
 
 **Critics** (`golden/code`, 10 cases against tripplanner-ios at `ebe6b67`): five diffs with three
-seeded flaws each and a correct twin of each. `uv run python scripts/golden_critics.py` applies every
+or four seeded flaws each (16 in all) and a correct twin of each. `uv run python scripts/golden_critics.py` applies every
 patch to a fresh clone, runs the critic pass and scores the kept findings. The summary adds
 `clean_first_pass_rate`, the share of correct changes that pass without a blocker. The patches are
 checked to apply and to hold their quotes, but not compiled; run `swift build` on one if in doubt.
@@ -222,4 +222,5 @@ Four more cases (`heldout_*` and `clean_heldout_*`: rename a Trip, remove a Stop
 first critic run and are skipped by default, so no prompt is tuned on them. Tune on the main set, then run
 `uv run python scripts/golden_critics.py --heldout` once and report both. Scoring counts a finding for a
 flaw when the flaw's quote is on the cited line, or within `LINE_SLACK` lines of it when the finding hits
-no flaw exactly; report the exact-line numbers next to the lenient ones.
+no flaw exactly. The summary gives both: `detection_rate` with the window and `detection_rate_exact`
+without it; report them side by side.

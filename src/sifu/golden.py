@@ -44,6 +44,8 @@ class CaseScore:
     name: str
     clean: bool
     detected: dict[str, bool] = field(default_factory=dict)
+    # the same, counting only findings whose cited line holds the quote (no LINE_SLACK)
+    detected_exact: dict[str, bool] = field(default_factory=dict)
     by_expected_critic: dict[str, bool] = field(default_factory=dict)
     false_positives: list[dict[str, Any]] = field(default_factory=list)
 
@@ -109,6 +111,7 @@ def score_case(
         ]
         matched.update(hits)
         score.detected[flaw.id] = bool(hits)
+        score.detected_exact[flaw.id] = any(quoted(flaw, f, 0) for f in findings)
         score.by_expected_critic[flaw.id] = any(
             flaw.critic in findings[i]["critic"].split("+") for i in hits
         )
@@ -122,12 +125,15 @@ def score_case(
 
 def summarize(scores: list[CaseScore]) -> dict[str, Any]:
     flaws = [d for s in scores for d in s.detected.values()]
+    exact = [d for s in scores for d in s.detected_exact.values()]
     clean = [s for s in scores if s.clean]
     return {
         "cases": len(scores),
         "flaws": len(flaws),
         "detected": sum(flaws),
         "detection_rate": round(sum(flaws) / len(flaws), 3) if flaws else None,
+        "detected_exact": sum(exact),
+        "detection_rate_exact": round(sum(exact) / len(exact), 3) if exact else None,
         "false_positives": sum(len(s.false_positives) for s in scores),
         "blocker_false_positives": sum(s.blocker_false_positives for s in scores),
         "clean_cases": len(clean),

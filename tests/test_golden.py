@@ -46,6 +46,8 @@ def test_a_finding_that_cites_a_line_next_to_the_quote_still_detects_the_flaw():
     # models often cite the signature or body line beside the one the label quotes
     near = score_case(case("demo1_day_plan_limit"), [finding(20)], INDEX)
     assert near.detected["off_by_one"] and near.false_positives == []
+    assert near.detected_exact == {k: False for k in near.detected}  # only the window found it
+    assert summarize([near])["detected_exact"] == 0 and summarize([near])["detected"] == 1
     far = score_case(case("demo1_day_plan_limit"), [finding(28)], INDEX)
     assert not any(far.detected.values()) and len(far.false_positives) == 1
     # a finding exactly on one flaw's quote does not also claim a flaw two lines away
@@ -76,6 +78,7 @@ def test_any_finding_on_a_clean_case_is_a_false_positive_and_the_summary_adds_up
     seeded = score_case(case("demo1_day_plan_limit"), [finding(22)], INDEX)
     total = summarize([clean, seeded])
     assert total["flaws"] == 3 and total["detected"] == 1 and total["detection_rate"] == 0.333
+    assert total["detected_exact"] == 1 and total["detection_rate_exact"] == 0.333
     assert total["false_positives"] == 1 and total["clean_cases_with_findings"] == 1
     assert total["clean_first_pass_rate"] == 0.0  # the one clean case got a blocker
 
