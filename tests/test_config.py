@@ -32,7 +32,9 @@ def test_each_backend_keeps_its_own_model():
 def test_env_var_switches_the_backend_for_one_run(monkeypatch):
     monkeypatch.setenv("SIFU_IMPLEMENTER_BACKEND", "ollama")
     cfg = load_config(ROOT / "config.yaml")
-    assert cfg.implementer.backend == "ollama" and cfg.implementer.model == "qwen3-coder:30b"
+    # the local model is whatever config.yaml names, so a model swap does not break this test
+    assert cfg.implementer.backend == "ollama"
+    assert cfg.implementer.model == cfg.implementer.ollama_model != cfg.implementer.cloud_model
     monkeypatch.setenv("SIFU_IMPLEMENTER_BACKEND", "lmstudio")
     with pytest.raises(ValueError):
         load_config(ROOT / "config.yaml")

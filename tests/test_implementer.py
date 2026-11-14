@@ -155,7 +155,7 @@ def test_worktree_is_reused_and_status_lists_untracked_files(repo, tmp_path):
 def test_result_records_the_backend_and_model(cfg, repo, tmp_path):
     cfg.implementer.backend = "ollama"
     out = implementer(cfg, repo, tmp_path, make_runner(reply()))(10, "s", "c")
-    assert out.backend == "ollama" and out.model == "qwen3-coder:30b"
+    assert out.backend == "ollama" and out.model == cfg.implementer.ollama_model
     cfg.implementer.backend = "cloud"
     out = implementer(cfg, repo, tmp_path, make_runner(reply()))(11, "s", "c")
     assert out.backend == "cloud" and out.model == "claude-code default"
