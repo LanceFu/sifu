@@ -36,7 +36,7 @@ from sifu.assessors import run_assessor
 from sifu.config import Config
 from sifu.context import ProductContext
 from sifu.github import GitHubError
-from sifu.glossary import Glossary, check_text
+from sifu.glossary import Glossary, check_text, normalize_text
 from sifu.lessons import propose_lesson
 from sifu.llm import LLM, StructuredOutcome
 from sifu.models import (
@@ -84,8 +84,9 @@ def merge_reports(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[
 
 class TicketState(TypedDict, total=False):
     ticket_id: int
-    title: str
+    title: str  # the ticket in glossary terms; what reviewers, the author and assessors read
     body: str
+    source_text: str  # the ticket as written; the deterministic checks read this
     facts: dict[str, bool]
     round: int
     reports: Annotated[list[dict[str, Any]], merge_reports]
@@ -227,9 +228,22 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
                 created=str(ticket.get("created_at", "")),
             ),
         )
+        glossary = Glossary.model_validate(
+            deps.tool("supervisor", "list_glossary_terms", log_for=tid)
+        )
+        title = normalize_text(glossary, ticket["title"])
+        body = normalize_text(glossary, ticket["body"])
+        if (title, body) != (ticket["title"], ticket["body"]):
+            deps.log(
+                tid,
+                "glossary_normalized",
+                "deterministic_checks",
+                {"title": title, "body": body, "deterministic": True},
+            )
         return {
-            "title": ticket["title"],
-            "body": ticket["body"],
+            "title": title,
+            "body": body,
+            "source_text": f"{ticket['title']}\n{ticket['body']}",
             "reports": [{"reset": True}],
             "round": state.get("round", 0),
         }
@@ -239,7 +253,8 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         glossary = Glossary.model_validate(
             deps.tool("supervisor", "list_glossary_terms", log_for=tid)
         )
-        text = f"{state['title']}\n{state['body']}"
+        # the ticket as written, so an avoided word is still flagged after load rewrote it
+        text = state.get("source_text") or f"{state['title']}\n{state['body']}"
         found = check_text(glossary, text) + checks.run_checks(text)
         deps.log(
             tid,

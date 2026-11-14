@@ -110,6 +110,22 @@ def test_glossary_minor_findings_become_review_notes(conn, make_ticket, make_dep
     assert "Use 'Traveller' instead of 'user'" in open(state["spec_path"]).read()
 
 
+def test_models_read_the_ticket_in_glossary_terms_but_the_check_still_flags_it(
+    conn, make_ticket, make_deps
+):
+    llm = FakeLLM()
+    ticket = make_ticket(
+        "Let a user add a waypoint",
+        "Given a user has a Day Plan with 3 Stops, When they add a waypoint, Then it has 4 Stops.",
+    )
+    state = run_ticket(make_deps(llm), ticket)
+    prompts = [c["user"] for c in llm.calls if c["key"] in ("Ambiguity", "Scope", "Policy")]
+    assert len(prompts) == 3
+    assert all("Let a Traveller add a Stop" in p and "waypoint" not in p for p in prompts)
+    assert "Use 'Stop' instead of 'waypoint'" in open(state["spec_path"]).read()
+    assert "glossary_normalized" in kinds(conn, ticket)
+
+
 def test_ticket_stops_at_spec_until_both_acceptances_are_given(conn, make_ticket, make_deps):
     ticket = make_ticket("T", CLEAN_BODY)
     run_ticket(make_deps(FakeLLM()), ticket, facts={"spec_accepted": True})

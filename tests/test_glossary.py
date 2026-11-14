@@ -23,3 +23,38 @@ def test_out_of_scope_is_major_and_matches_plurals(ctx):
 
 def test_clean_text_has_no_findings(ctx):
     assert check_text(ctx.glossary, "A Traveller adds a Stop.") == []
+
+
+def test_avoided_words_are_replaced_with_their_term_keeping_plurals_and_case(ctx):
+    from sifu.glossary import Glossary, GlossaryTerm, normalize_text
+
+    text = "A user adds two waypoints. Users see each waypoint."
+    assert normalize_text(ctx.glossary, text) == (
+        "A Traveller adds two Stops. Travellers see each Stop."
+    )
+    # a longer avoided phrase wins over a shorter one inside it
+    glossary = Glossary(
+        terms=[
+            GlossaryTerm(term="Stop", definition="d", avoid=["point", "point of interest"]),
+            GlossaryTerm(term="Day Plan", definition="d", avoid=["day schedule"]),
+        ]
+    )
+    assert normalize_text(glossary, "Each point of interest on two day schedules.") == (
+        "Each Stop on two Day Plans."
+    )
+
+
+def test_normalizing_leaves_code_spans_partial_words_and_clean_text_alone(ctx):
+    from sifu.glossary import normalize_text
+
+    text = "The username field and `location` key stay; a Traveller adds a Stop."
+    assert normalize_text(ctx.glossary, text) == text
+
+
+def test_normalizing_leaves_file_paths_alone(ctx):
+    from sifu.glossary import normalize_text
+
+    text = "Edit Sources/User/Waypoint.swift and user.yml for each user."
+    assert normalize_text(ctx.glossary, text) == (
+        "Edit Sources/User/Waypoint.swift and user.yml for each Traveller."
+    )
