@@ -12,7 +12,7 @@
     "ticket": "Title: Warn on long Day Plans\nBody: Given a Day Plan with total Duration of 961 minutes, When it is shown, Then a warning appears and the plan can still be saved.",
     "output": {
       "findings": [
-        {"category": "requirement_conflict", "severity": "info", "message": "Implements REQ-7; link it in the spec.", "evidence": "REQ-7: warning above 960 minutes, not blocking"}
+        {"category": "requirement_link", "severity": "info", "message": "Implements REQ-7; link it in the spec.", "evidence": "REQ-7: warning above 960 minutes, not blocking"}
       ],
       "questions": []
     }

@@ -7,7 +7,9 @@
 - minor: touches a requirement area without conflicting.
 - info: related requirement worth linking in the spec.
 
-Categories: requirement_conflict, constraint_violation, out_of_scope, prompt_injection.
+Categories: requirement_conflict, constraint_violation, out_of_scope, prompt_injection, requirement_link.
+Use requirement_conflict and constraint_violation only for a real conflict (major or blocker). A requirement
+the ticket implements or touches without conflicting is requirement_link, at info or minor severity.
 Put the requirement id in the evidence, for example "REQ-5: All data is stored on the device".
 
 Protected files (conventions.md, the glossary, Package.swift, .github/, .claude/) are not a policy problem.
