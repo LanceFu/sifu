@@ -6,17 +6,17 @@ ollama:
   num_ctx: 65536            # Claude Code needs 64K+ when the implementer runs locally
 
 models:
-  author: "qwen3.8:27b"           # intent / spec / plan modes
-  spec_reviewer: "qwen3.8:27b"
+  author: "qwen3.8:27b-mlx"           # intent / spec / plan modes
+  spec_reviewer: "qwen3.8:27b-mlx"
   code_reviewer: "gemma4:31b-mlx"     # different family from the author (separation of duties)
   risk_assessors:                 # two families so agreement is a real signal
-    - "qwen3.8:27b"
+    - "qwen3.8:27b-mlx"
     - "gemma4:31b-mlx"
 
 implementer:
   backend: cloud            # cloud | ollama. Override once with SIFU_IMPLEMENTER_BACKEND=ollama
   cloud_model: null         # null: the Claude Code default
-  ollama_model: "qwen3-coder:30b"
+  ollama_model: "qwen3.6:35b-mlx"
   max_turns: 30
   timeout_seconds: 1800
   allowed_tools:
