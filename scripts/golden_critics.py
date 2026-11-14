@@ -24,19 +24,21 @@ from pathlib import Path
 
 from sifu.config import load_config
 from sifu.critic import added_index, review_worktree
-from sifu.golden import is_heldout, load_cases, score_case, score_checks, summarize
+from sifu.golden import CaseScore, is_heldout, load_cases, score_case, score_checks, summarize
 from sifu.llm import OllamaLLM
 from sifu.provenance import finish_stamp, git_stamp, print_provenance
-from sifu.verify import added_lines, run_verify
+from sifu.verify import VerifyResult, added_lines, run_verify
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def git(*args: str, cwd: Path | None = None) -> None:
+    """Run a git command and raise if it fails."""
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
 
 def main() -> None:
+    """Parse the command line and run the script."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", action="append", help="a case name (repeatable)")
     parser.add_argument(
@@ -129,7 +131,8 @@ def main() -> None:
     print("Wrote", path)
 
 
-def print_checks(name: str, score, checks) -> None:
+def print_checks(name: str, score: CaseScore, checks: VerifyResult) -> None:
+    """Print one case's verify steps and which seeded flaws the checks caught."""
     steps = " ".join(f"{s['name']}={'ok' if s.get('ok') else 'FAIL'}" for s in checks.steps)
     caught = [k for k, ok in score.caught_by_checks.items() if ok]
     print(f"\n{name} checks: {steps}; caught {caught or 'none'}")

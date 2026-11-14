@@ -27,6 +27,7 @@ DESIGN_ROWS = [
 
 
 def load(path: str | Path) -> dict[str, Any]:
+    """Read one JSON results file."""
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 

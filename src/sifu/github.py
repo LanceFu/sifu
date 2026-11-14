@@ -6,6 +6,7 @@ The token is read through ``sifu.credentials`` as a ``SecretStr`` and is only ha
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from sifu.config import GithubConfig
@@ -19,19 +20,22 @@ class GitHubError(RuntimeError):
 
 
 class GitHubClient:
+    """The few GitHub calls Sifu makes on the product repository."""
+
     def __init__(self, repo: Any, required_check: str = "test") -> None:
         self.repo = repo
         self.required_check = required_check
 
     @classmethod
     def from_config(cls, cfg: GithubConfig) -> GitHubClient:
+        """Build a client for the configured repository, using the stored token."""
         from github import Auth, Github  # imported here so the rest of Sifu works without it
 
         token = get_github_token(cfg)
         client = Github(auth=Auth.Token(token.get_secret_value()))
         return cls(client.get_repo(cfg.repo), cfg.required_check)
 
-    def _call(self, what: str, fn, *args, **kwargs):
+    def _call(self, what: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         try:
             return fn(*args, **kwargs)
         except Exception as exc:  # PyGithub raises several types
@@ -40,6 +44,7 @@ class GitHubClient:
     def create_pr(
         self, *, head: str, base: str, title: str, body: str, draft: bool = False
     ) -> tuple[int, str]:
+        """Open a pull request and return its number and URL."""
         pr = self._call(
             "create pull request",
             self.repo.create_pull,
@@ -52,6 +57,7 @@ class GitHubClient:
         return int(pr.number), str(pr.html_url)
 
     def comment(self, number: int, body: str) -> None:
+        """Post a comment on a pull request."""
         pr = self._call("get pull request", self.repo.get_pull, number)
         self._call("comment", pr.create_issue_comment, body)
 
@@ -65,6 +71,7 @@ class GitHubClient:
         return "success" if all(r.conclusion == "success" for r in mine) else "failure"
 
     def merge(self, number: int, method: str, sha: str) -> bool:
+        """Merge a pull request pinned to a commit sha; return whether GitHub merged it."""
         pr = self._call("get pull request", self.repo.get_pull, number)
         result = self._call("merge", pr.merge, merge_method=method, sha=sha)
         return bool(getattr(result, "merged", False))

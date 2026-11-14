@@ -19,7 +19,7 @@ from sifu.config import load_config
 from sifu.credentials import get_github_token
 from sifu.demo import answer_request, load_seed_tickets, open_demo, show_decisions
 from sifu.github import GitHubClient
-from sifu.graph import is_paused, run_ticket
+from sifu.graph import Deps, is_paused, run_ticket
 from sifu.implementer import Implementer
 from sifu.pr_flow import publish_branch
 from sifu.verify import Verifier
@@ -28,7 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DB = str(ROOT / "data" / "live.db")
 
 
-def open_live(merge_mode: str, planner: bool = False, db_path: str = DB):
+def open_live(merge_mode: str, planner: bool = False, db_path: str = DB) -> tuple[Deps, int]:
+    """Open the database and wire the real implementer, verifier and GitHub client."""
     cfg = load_config(ROOT / "config.yaml")
     cfg.router.merge_mode = merge_mode
     cfg.planner.enabled = planner
@@ -46,6 +47,7 @@ def open_live(merge_mode: str, planner: bool = False, db_path: str = DB):
 
 
 def main() -> None:
+    """Parse the command line and run the script."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--key", default="clean", help="seed ticket key (default: clean)")
     parser.add_argument("--title", help="use this ticket title instead of the seed ticket's")

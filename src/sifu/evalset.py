@@ -17,6 +17,7 @@ results table:
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,8 @@ CATCHERS = ("checks", "models", "floor")
 
 @dataclass(frozen=True)
 class GoldenTicket:
+    """One labelled Design-stage ticket from golden/tickets.yaml."""
+
     key: str
     defect: str
     title: str
@@ -87,6 +90,8 @@ def load_tickets(path: Path = GOLDEN_TICKETS, only: list[str] | None = None) -> 
 
 @dataclass
 class TicketScore:
+    """How one system handled one golden ticket on one run."""
+
     key: str
     defect: str
     by: str
@@ -207,7 +212,7 @@ def format_markdown(summaries: dict[str, dict[str, Any]]) -> str:
     names = list(summaries)
     rows: list[tuple[str, list[str]]] = []
 
-    def add(label: str, fn) -> None:
+    def add(label: str, fn: Callable[[dict[str, Any]], str]) -> None:
         rows.append((label, [fn(summaries[n]) for n in names]))
 
     add("Runs (tickets x repeats)", lambda s: f"{s['runs']} ({s['tickets']} tickets)")

@@ -28,6 +28,7 @@ from typing import Annotated, Any, TypedDict
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 
 from sifu import checks, db, router
@@ -44,6 +45,7 @@ from sifu.models import (
     DecisionType,
     Finding,
     ReviewerReport,
+    RiskAssessment,
     RiskTier,
     Spec,
     TicketStatus,
@@ -83,6 +85,8 @@ def merge_reports(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[
 
 
 class TicketState(TypedDict, total=False):
+    """The ticket's state as LangGraph checkpoints it between nodes."""
+
     ticket_id: int
     title: str  # the ticket in glossary terms; what reviewers, the author and assessors read
     body: str
@@ -144,10 +148,12 @@ class Deps:
 
     @property
     def proposed_conventions(self) -> Path:
+        """Where a proposed conventions.md is written for review."""
         return self.artifacts_dir / "conventions.proposed.md"
 
     @property
     def approved_conventions(self) -> Path:
+        """The conventions.md in the product repo that agents load."""
         return Path(self.cfg.workspace.product_repo_path).expanduser() / "conventions.md"
 
     def _tool_log(self, kind: str, payload: dict[str, Any]) -> None:
@@ -156,16 +162,19 @@ class Deps:
             self.log(ticket_id, kind, payload["actor"], payload)
 
     def tool(self, actor: str, name: str, *, log_for: int | None = None, **arguments: Any) -> Any:
+        """Call a tool through the gateway as the given actor."""
         assert self.gateway is not None
         return self.gateway.call(actor, name, for_ticket=log_for, **arguments)
 
     def log(self, ticket_id: int, kind: str, actor: str, payload: dict[str, Any]) -> None:
+        """Append an event for the ticket under the connection lock."""
         with self.lock:
             db.append_event(self.conn, ticket_id, kind, actor, payload)
 
     def log_run(
         self, ticket_id: int, agent: str, model: str, outcome: StructuredOutcome[Any]
     ) -> None:
+        """Record a model call's tokens, latency and result for the ticket."""
         with self.lock:
             db.record_run(
                 self.conn,
@@ -194,6 +203,7 @@ class Deps:
     def move(
         self, ticket_id: int, status: TicketStatus, facts: dict[str, bool] | None = None
     ) -> None:
+        """Move the ticket to a new status; the state machine rejects illegal transitions."""
         with self.lock:
             db.set_status(self.conn, ticket_id, status, facts)
 
@@ -203,12 +213,12 @@ def sqlite_checkpointer(path: str) -> SqliteSaver:
     return SqliteSaver(sqlite3.connect(path, check_same_thread=False))
 
 
-def _repo_name(cfg) -> str:
+def _repo_name(cfg: Config) -> str:
     """The product repo's short name, e.g. ``tripplanner-ios``."""
     return cfg.github.repo.rsplit("/", 1)[-1]
 
 
-def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - one flat node list
+def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGraph:  # noqa: C901 - one flat node list
     """Compile the ticket graph for the given dependencies."""
     cfg = deps.cfg
 
@@ -264,7 +274,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         )
         return {"glossary_findings": [f.model_dump() for f in found]}
 
-    def reviewer_node(name: str):
+    def reviewer_node(name: str) -> Callable[[TicketState], TicketState]:
         def node(state: TicketState) -> TicketState:
             tid = state["ticket_id"]
             deps.check_budget(tid)
@@ -391,7 +401,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
             ),
         )
 
-        def assess(model: str):
+        def assess(model: str) -> RiskAssessment:
             deps.check_budget(tid)
             assessment, outcome = run_assessor(
                 model,
@@ -760,7 +770,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         names = [s["name"] for s in json.loads(steps[-1]["payload"])["steps"]] if steps else []
         model = cfg.models.code_reviewer
 
-        def one(name: str):
+        def one(name: str) -> critic_pass.CriticReport:
             deps.check_budget(tid)
             report, outcome = critic_pass.run_critic(
                 name,
@@ -784,7 +794,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         if cfg.critic.confirm_blockers:
             checker = cfg.critic.confirm_model or cfg.models.author
 
-            def confirm(f: dict[str, Any]):
+            def confirm(f: dict[str, Any]) -> tuple[bool, str]:
                 deps.check_budget(tid)
                 ok, reason, outcome = critic_pass.confirm_blocker(
                     f,
@@ -969,7 +979,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR):  # noqa: C901 - on
         assessments = []
         if cfg.router.merge_mode != "auto":
 
-            def assess(model: str):
+            def assess(model: str) -> RiskAssessment:
                 deps.check_budget(tid)
                 assessment, outcome = run_assessor(
                     model,
@@ -1174,4 +1184,5 @@ def resume_ticket(
 
 
 def is_paused(state: dict[str, Any]) -> bool:
+    """True when the graph stopped at an interrupt and is waiting for a human."""
     return bool(state.get("__interrupt__"))

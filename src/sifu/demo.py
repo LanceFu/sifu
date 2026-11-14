@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_seed_tickets(path: Path = ROOT / "seed" / "tickets.yaml") -> list[dict[str, Any]]:
+    """Load the seeded demo tickets from seed/tickets.yaml."""
     with open(path, encoding="utf-8") as handle:
         return yaml.safe_load(handle)["tickets"]
 
@@ -148,6 +149,7 @@ def _print_row(row: dict[str, Any], events: list[Any]) -> None:
 
 
 def main() -> None:
+    """Parse the command line and run the script."""
     parser = argparse.ArgumentParser(description="Run the Design stage on seeded tickets.")
     parser.add_argument("--ticket", action="append", help="seed key; repeat for several")
     parser.add_argument("--db", default=":memory:")

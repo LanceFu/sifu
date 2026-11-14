@@ -18,6 +18,7 @@ class ProductContext:
 
     @classmethod
     def load(cls, repo_path: str | Path) -> ProductContext:
+        """Read the glossary, the PRD and the optional conventions.md from a product repo."""
         root = Path(repo_path).expanduser()
         return cls(
             glossary=load_glossary(root / "docs" / "glossary.yaml"),
@@ -26,6 +27,7 @@ class ProductContext:
         )
 
     def glossary_text(self) -> str:
+        """The glossary as prompt text: one line per term, then the out-of-scope list."""
         lines = [
             f"- {t.term}: {t.definition} (avoid: {', '.join(t.avoid)})" for t in self.glossary.terms
         ]

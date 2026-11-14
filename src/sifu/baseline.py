@@ -30,6 +30,8 @@ Category = Literal[
 
 
 class BaselineIssue(BaseModel):
+    """One problem the single-prompt baseline reports on a ticket."""
+
     category: Category
     severity: Literal["info", "minor", "major", "blocker"]
     message: str
@@ -67,6 +69,7 @@ Reply with only a JSON object: {"verdict", "route", "issues": [{"category", "sev
 
 
 def baseline_system_prompt(ctx: ProductContext) -> str:
+    """Build the baseline's one system prompt from the same product context the swarm gets."""
     parts = [
         INSTRUCTIONS,
         "## Glossary\n" + ctx.glossary_text(),
@@ -87,6 +90,7 @@ def failsafe() -> BaselineOutput:
 def run_baseline_ticket(
     *, title: str, body: str, ctx: ProductContext, llm: LLM, model: str
 ) -> StructuredOutcome[BaselineOutput]:
+    """Run the single-prompt baseline on one ticket."""
     return structured_call(
         llm,
         model=model,

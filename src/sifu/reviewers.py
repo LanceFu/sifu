@@ -60,6 +60,7 @@ def build_system_prompt(spec: ReviewerSpec, ctx: ProductContext) -> str:
 
 
 def build_user_prompt(title: str, body: str) -> str:
+    """Wrap the ticket in tags that mark it as untrusted data."""
     return f"{UNTRUSTED_NOTE}\n\n<ticket>\nTitle: {title}\nBody: {body}\n</ticket>"
 
 

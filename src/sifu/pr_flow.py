@@ -77,6 +77,7 @@ def render_pr_body(
     changed_files: list[str],
     verify: Mapping[str, Any] | None,
 ) -> str:
+    """Render the pull request description: the spec, the changed files and Sifu's checks."""
     steps = ", ".join(
         f"{s['name']} {'ok' if s.get('ok') else 'failed'}" for s in (verify or {}).get("steps", [])
     )

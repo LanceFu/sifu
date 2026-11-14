@@ -35,7 +35,8 @@ class LLM(Protocol):
 
     def complete(
         self, *, model: str, system: str, user: str, schema: dict[str, Any] | None = None
-    ) -> LLMResult: ...
+    ) -> LLMResult:
+        """Send one prompt and return the reply text with its token counts."""
 
 
 class OllamaLLM:
@@ -51,11 +52,13 @@ class OllamaLLM:
 
     @classmethod
     def from_config(cls, cfg: OllamaConfig) -> OllamaLLM:
+        """Build a client from the ollama section of the config."""
         return cls(cfg.base_url, cfg.num_ctx, num_predict=cfg.num_predict)
 
     def complete(
         self, *, model: str, system: str, user: str, schema: dict[str, Any] | None = None
     ) -> LLMResult:
+        """Call the model through ChatOllama, constrained to the JSON schema if one is given."""
         from langchain_ollama import ChatOllama
 
         chat = ChatOllama(

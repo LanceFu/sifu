@@ -12,6 +12,7 @@ from sifu.reviewers import PROMPTS_DIR, UNTRUSTED_NOTE
 
 
 def build_system_prompt(ctx: ProductContext, prompts_dir: Path = PROMPTS_DIR) -> str:
+    """Build the risk assessor's system prompt: persona, rubric, glossary and few-shot examples."""
     folder = prompts_dir / "risk"
     fewshot = json.loads((folder / "fewshot.json").read_text(encoding="utf-8"))
     examples = "\n\n".join(

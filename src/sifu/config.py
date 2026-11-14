@@ -13,6 +13,8 @@ BACKEND_ENV = "SIFU_IMPLEMENTER_BACKEND"
 
 
 class OllamaConfig(BaseModel):
+    """Where Ollama runs and the context and output limits for every model call."""
+
     base_url: str = "http://localhost:11434"
     num_ctx: int = 65536
     # most output tokens per reply, thinking included: a reasoning model can loop until the
@@ -21,6 +23,8 @@ class OllamaConfig(BaseModel):
 
 
 class ModelsConfig(BaseModel):
+    """The Ollama model tag for each agent role."""
+
     author: str
     spec_reviewer: str
     code_reviewer: str
@@ -97,6 +101,8 @@ class PlannerConfig(BaseModel):
 
 
 class RouterConfig(BaseModel):
+    """Merge mode, loop and token caps, and the protected paths behind the floor rules."""
+
     merge_mode: Literal["manual", "risk_based", "auto"] = "risk_based"
     max_build_iterations: int = 3
     max_design_rounds: int = 3
@@ -105,6 +111,8 @@ class RouterConfig(BaseModel):
 
 
 class GithubConfig(BaseModel):
+    """The product repository on GitHub and how Sifu authenticates, waits for CI and merges."""
+
     repo: str
     token_env: str = "SIFU_GITHUB_TOKEN"
     keychain_service: str = "sifu-github-token"
@@ -118,16 +126,22 @@ class GithubConfig(BaseModel):
 
 
 class WorkspaceConfig(BaseModel):
+    """Local paths for the product repo clone, the ticket worktrees and the artifacts."""
+
     product_repo_path: str
     worktrees_dir: str
     artifacts_dir: str = "data/artifacts"
 
 
 class DatabaseConfig(BaseModel):
+    """Where the SQLite database lives."""
+
     path: str = "data/sifu.db"
 
 
 class Config(BaseModel):
+    """The whole of config.yaml, one section per field."""
+
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     models: ModelsConfig
     implementer: ImplementerConfig = Field(default_factory=ImplementerConfig)

@@ -12,12 +12,16 @@ from sifu.models import Finding
 
 
 class GlossaryTerm(BaseModel):
+    """One product term, its definition and the words to avoid in its place."""
+
     term: str
     definition: str
     avoid: list[str] = Field(default_factory=list)
 
 
 class Glossary(BaseModel):
+    """The product's terms and what is out of scope for version 1."""
+
     terms: list[GlossaryTerm] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
 

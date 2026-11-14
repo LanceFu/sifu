@@ -52,6 +52,7 @@ def check_acceptance_format(text: str) -> list[Finding]:
 
 
 def run_checks(text: str) -> list[Finding]:
+    """Run every deterministic ticket check and return the findings."""
     return screen_injection(text) + check_acceptance_format(text)
 
 

@@ -136,6 +136,7 @@ def fallback_spec(title: str, body: str) -> Spec:
 
 
 def ticket_code(ticket_id: int) -> str:
+    """The ticket's display code, for example TP-0007."""
     return f"TP-{ticket_id:04d}"
 
 
@@ -259,6 +260,7 @@ def render_spec_md(
 
 
 def render_questions_md(ticket_id: int, questions: list[ClarifyingQuestion]) -> str:
+    """Render clarifying questions as the questions.md artifact."""
     lines = [f"# Questions for ticket {ticket_id}", ""]
     lines += [
         f"{i}. {q.question} ({', '.join(q.sources)})" for i, q in enumerate(questions, start=1)

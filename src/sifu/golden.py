@@ -19,6 +19,8 @@ GOLDEN_DIR = Path(__file__).resolve().parents[2] / "golden" / "code"
 
 @dataclass(frozen=True)
 class Flaw:
+    """One seeded flaw in a golden diff and the critic expected to find it."""
+
     id: str
     file: str
     quotes: list[str]
@@ -27,6 +29,8 @@ class Flaw:
 
 @dataclass(frozen=True)
 class Case:
+    """One golden code case: a patch on a base commit, its spec and its seeded flaws."""
+
     name: str
     base: str
     spec_path: Path
@@ -36,11 +40,14 @@ class Case:
 
     @property
     def clean(self) -> bool:
+        """True when the case has no seeded flaws."""
         return not self.expected
 
 
 @dataclass
 class CaseScore:
+    """How the critics and the deterministic checks did on one golden case."""
+
     name: str
     clean: bool
     detected: dict[str, bool] = field(default_factory=dict)
@@ -55,10 +62,12 @@ class CaseScore:
 
     @property
     def blocker_false_positives(self) -> int:
+        """The number of false positives the critics rated as blockers."""
         return sum(1 for f in self.false_positives if f["severity"] == "blocker")
 
 
 def load_cases(root: Path = GOLDEN_DIR, only: list[str] | None = None) -> list[Case]:
+    """Load the golden code cases, optionally only the named ones."""
     cases = []
     for folder in sorted(p for p in root.iterdir() if (p / "case.yaml").is_file()):
         if only and folder.name not in only:
@@ -169,6 +178,7 @@ def score_case(
 
 
 def summarize(scores: list[CaseScore]) -> dict[str, Any]:
+    """Total the case scores into the numbers the results table reports."""
     flaws = [d for s in scores for d in s.detected.values()]
     exact = [d for s in scores for d in s.detected_exact.values()]
     clean = [s for s in scores if s.clean]

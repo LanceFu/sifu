@@ -28,6 +28,7 @@ DB = ROOT / "data" / "lessons.db"
 
 
 def main() -> None:
+    """Parse the command line and run the script."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lessons", required=True, help="YAML list of {lesson, evidence}")
     parser.add_argument(

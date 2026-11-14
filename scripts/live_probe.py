@@ -21,13 +21,14 @@ import argparse
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 from live_run import ROOT, open_live
 
 from sifu import db
 from sifu.demo import show_decisions
-from sifu.graph import is_paused, run_ticket
-from sifu.implementer import Implementer
+from sifu.graph import Deps, is_paused, run_ticket
+from sifu.implementer import Implementer, ImplementerResult
 from sifu.verify import Verifier
 
 # A ticket still open in TripPlanner (REQ-3 is "Planned"), so the implementer has work to do.
@@ -45,7 +46,15 @@ class Probe:
     def __init__(self, inner: Implementer, scenario: str) -> None:
         self.inner, self.scenario, self.calls = inner, scenario, 0
 
-    def __call__(self, ticket_id, spec_text, conventions, feedback=None, session_id=None):
+    def __call__(
+        self,
+        ticket_id: int,
+        spec_text: str,
+        conventions: str,
+        feedback: list[dict[str, Any]] | None = None,
+        session_id: str | None = None,
+    ) -> ImplementerResult:
+        """Run the real implementer, then plant the violation when the scenario calls for it."""
         result = self.inner(ticket_id, spec_text, conventions, feedback, session_id)
         self.calls += 1
         if result.ok and (self.scenario == "always" or self.calls == 1):
@@ -68,22 +77,26 @@ class Probe:
         return result
 
 
-def kinds(deps, ticket_id) -> list[str]:
+def kinds(deps: Deps, ticket_id: int) -> list[str]:
+    """The kinds of the ticket's events, oldest first."""
     return [e["kind"] for e in db.list_events(deps.conn, ticket_id)]
 
 
-def verify_oks(deps, ticket_id) -> list[bool]:
+def verify_oks(deps: Deps, ticket_id: int) -> list[bool]:
+    """The pass or fail result of each verify round, oldest first."""
     rows = [e for e in db.list_events(deps.conn, ticket_id) if e["kind"] == "verify_result"]
     return [json.loads(e["payload"])["ok"] for e in rows]
 
 
 def report(checks: list[tuple[str, bool]]) -> None:
+    """Print a PASS or FAIL line for each labelled check."""
     print("\nChecklist")
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
 
 
 def main() -> None:
+    """Parse the command line and run the script."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scenario", choices=["once", "always"])
     args = parser.parse_args()

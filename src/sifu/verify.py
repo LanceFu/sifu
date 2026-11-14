@@ -64,6 +64,8 @@ class Finding:
 
 @dataclass
 class VerifyResult:
+    """One verify run: pass or fail, the findings and each step's result."""
+
     ok: bool
     findings: list[Finding] = field(default_factory=list)
     steps: list[dict[str, Any]] = field(default_factory=list)
@@ -71,10 +73,12 @@ class VerifyResult:
 
     @property
     def fingerprint(self) -> str:
+        """A short hash of the findings, used to detect two rounds with no progress."""
         keys = sorted(f.key() for f in self.findings)
         return hashlib.sha256(json.dumps(keys).encode()).hexdigest()[:16]
 
     def to_payload(self, limit: int | None = None) -> dict[str, Any]:
+        """The result as a JSON-ready dict for the events log, with at most `limit` findings."""
         shown = self.findings if limit is None else self.findings[:limit]
         return {
             "ok": self.ok,
@@ -176,6 +180,7 @@ def added_lines(worktree: Path) -> list[tuple[str, int, str]]:
 
 
 def in_scope(name: str, allowed: list[str]) -> bool:
+    """True when the path is one of the allowed entries or sits under an allowed directory."""
     for entry in allowed:
         base = entry.rstrip("/")
         if name == base or name.startswith(base + "/"):
@@ -240,6 +245,7 @@ def _env(base: Mapping[str, str] | None) -> dict[str, str]:
 def run_step(
     step: VerifyStep, worktree: Path, timeout: int, runner: Runner, env: Mapping[str, str]
 ) -> tuple[list[Finding], dict[str, Any]]:
+    """Run one verify step and return its findings and a summary; a timeout fails the step."""
     started = time.monotonic()
     info: dict[str, Any] = {"name": step.name, "command": " ".join(step.command)}
     try:
@@ -304,6 +310,7 @@ class Verifier:
         self.tag = tag
 
     def __call__(self, ticket_id: int, spec: Mapping[str, Any]) -> VerifyResult:
+        """Verify the ticket's worktree against the spec's affected paths."""
         name = f"ticket-{ticket_id}" + (f"-{self.tag}" if self.tag else "")
         worktree = Path(self.cfg.workspace.worktrees_dir).expanduser() / name
         return run_verify(self.cfg, worktree, list(spec.get("affected_paths", [])), self.runner)

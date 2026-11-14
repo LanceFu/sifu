@@ -30,6 +30,8 @@ PROTECTED_RULE = "touches_protected_path"
 
 
 class Lesson(BaseModel):
+    """One lesson to add to conventions.md, with the evidence behind it."""
+
     lesson: str  # the rule, one sentence, as it will read in conventions.md
     evidence: str  # where it was learned, for the PR description
 
@@ -41,15 +43,21 @@ def load_lessons(path: str | Path) -> list[Lesson]:
 
 
 class PullRequests(Protocol):
+    """The pull request calls the lessons flow needs from a GitHub client."""
+
     def create_pr(
         self, *, head: str, base: str, title: str, body: str, draft: bool = False
-    ) -> tuple[int, str]: ...
+    ) -> tuple[int, str]:
+        """Open a pull request and return its number and URL."""
 
-    def comment(self, number: int, body: str) -> None: ...
+    def comment(self, number: int, body: str) -> None:
+        """Post a comment on a pull request."""
 
 
 @dataclass
 class LessonsChange:
+    """A prepared conventions.md change and the router's decision on it."""
+
     worktree: Path
     branch: str
     added: list[Lesson]
@@ -107,6 +115,7 @@ def discard(repo: str | Path, worktree: str | Path, branch: str) -> None:
 
 
 def render_body(change: LessonsChange) -> str:
+    """Render the pull request description for a lessons change."""
     rows = "\n".join(f"- **{item.lesson}**\n  Evidence: {item.evidence}" for item in change.added)
     return (
         "Opened by Sifu. It adds lessons to `conventions.md` under `## Lessons`, learned from "
@@ -118,6 +127,7 @@ def render_body(change: LessonsChange) -> str:
 
 
 def render_decision(decision: DecisionResult) -> str:
+    """Render the router's decision as a pull request comment."""
     rules = ", ".join(f"`{r}`" for r in decision.rules_fired) or "none"
     return (
         f"**Sifu merge decision:** tier {decision.final_tier.name} "

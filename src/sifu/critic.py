@@ -115,6 +115,7 @@ def load_critic(name: str, prompts_dir: Path = PROMPTS_DIR) -> tuple[str, list[d
 
 
 def build_user_prompt(spec_text: str, diff_text: str, checks: str) -> str:
+    """Build a critic's user prompt: the spec, the checks that passed and the numbered diff."""
     return (
         f"{UNTRUSTED_NOTE}\n\n<spec>\n{spec_text.strip()}\n</spec>\n\n"
         f"Deterministic checks already passed: {checks}\n\n"
@@ -245,6 +246,7 @@ def context_lines(view: View, file: str, line: int, radius: int) -> str:
 
 
 def load_confirm(prompts_dir: Path = PROMPTS_DIR) -> str:
+    """Build the blocker-confirmation system prompt from its persona and few-shot examples."""
     folder = prompts_dir / "critic_confirm"
     persona = (folder / "persona.md").read_text(encoding="utf-8").strip()
     examples = json.loads((folder / "fewshot.json").read_text(encoding="utf-8"))

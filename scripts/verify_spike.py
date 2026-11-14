@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
+    """Parse the command line and run the script."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worktree", required=True, help="a ticket worktree to check")
     parser.add_argument(

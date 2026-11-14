@@ -27,6 +27,7 @@ Then saving fails with a nameBlank error and the Trip is not created (REQ-1).
 
 
 def main() -> None:
+    """Parse the command line and run the script."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", help="product repo (default: workspace.product_repo_path)")
     parser.add_argument("--worktrees", help="worktrees dir (default: workspace.worktrees_dir)")
@@ -68,6 +69,7 @@ def main() -> None:
 
 
 def comparison_table(runs: dict) -> str:
+    """Format one row per backend run as an aligned text table."""
     rows = [("backend", "model", "ok", "turns", "seconds", "cost_usd", "files", "denied")]
     for name, r in runs.items():
         rows.append(
