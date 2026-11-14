@@ -1,0 +1,12 @@
+# Held-out: written after the first critic run and not used to tune any prompt. REQ-1: rename a Trip. Two seeded flaws.
+base: ebe6b67
+notes: "Held-out: written after the first critic run and not used to tune any prompt. REQ-1: rename a Trip. Two seeded flaws."
+expected:
+  - id: newline_name_accepted
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["in: .whitespaces)"]
+    critic: edge_cases
+  - id: renamed_before_check
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["name = trimmed"]
+    critic: edge_cases

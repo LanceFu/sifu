@@ -13,7 +13,8 @@ Course project for Agentic AI (University of Waterloo). The target product is th
 | LangGraph ticket graph and Design stage (deterministic checks, three parallel reviewers, synthesizer) | Done; tested with a fake model, real Ollama run pending |
 | Risk router wiring (two assessors), pause and resume, lessons, FastMCP tools, caps, headless implementer | Done; tested with a fake model, real runs pending |
 | FastMCP server, GitHub PR flow, Claude Code implementer node | Later |
-| Evaluation harness (golden set vs single-prompt baseline), Streamlit UI | Later |
+| Evaluation harness (golden set vs single-prompt baseline) | Built and tested with fake models; real runs pending (see Evaluation) |
+| Streamlit UI | Later |
 
 ## Setup
 
@@ -182,3 +183,43 @@ rubric and few-shot examples (`prompts/critic_*`). A critic can add findings but
 
 `scripts/critic_spike.py` runs the critics on a worktree with the real model and prints what was kept
 and dropped.
+
+## Evaluation
+
+Two golden sets, one for each half of the pipeline, both compared with a baseline or twin.
+
+**Design stage** (`golden/tickets.yaml`, 23 tickets): five clean tickets, then seeded ambiguity (4),
+scope (3), contradiction with a requirement (3), prompt injection (3), a minor glossary slip (1), an
+out-of-scope feature (2) and a protected path (2). Each ticket has `expect` (spec or questions),
+`route` (auto or human) and `by` (who can catch it: `checks` for deterministic code alone, `models`,
+or `floor` for a router rule), so the report can separate what the models add beyond the code. The
+injection and ambiguity tickets include ones the regex and the Given/When/Then check cannot catch.
+
+```
+uv run python scripts/run_eval.py --check      # labels vs the deterministic code, no model needed
+uv run python scripts/run_eval.py              # swarm and single-prompt baseline, one run each
+uv run python scripts/run_eval.py --repeats 3  # also reports how stable the outcomes are
+uv run python scripts/run_eval.py --system swarm --label alt \
+    --set models.spec_reviewer=gemma4:31b-mlx --set models.author=gemma4:31b-mlx
+```
+
+The swarm runs the real graph (planner, critic and Build off) and never resumes a pause, so "human"
+means the ticket paused. The baseline (`baseline.py`) is one prompt with the same glossary, PRD and
+conventions, the same untrusted-ticket note and the same retry, but no personas, few-shot examples,
+parallel reviewers or code rules; it also picks the route itself. Results go to
+`data/artifacts/eval/design-<label>-<time>.json` and print as a markdown table: detection rate by
+defect type, false positives, false-auto, over-escalation, schema-valid and first-try rates, tokens
+and seconds per ticket. In a notebook: `sifu.evalrun.load_results(path)` and
+`sifu.evalset.format_markdown(results["summaries"])`.
+
+**Critics** (`golden/code`, 10 cases against tripplanner-ios at `ebe6b67`): five diffs with three
+seeded flaws each and a correct twin of each. `uv run python scripts/golden_critics.py` applies every
+patch to a fresh clone, runs the critic pass and scores the kept findings. The summary adds
+`clean_first_pass_rate`, the share of correct changes that pass without a blocker. The patches are
+checked to apply and to hold their quotes, but not compiled; run `swift build` on one if in doubt.
+
+Four more cases (`heldout_*` and `clean_heldout_*`: rename a Trip, remove a Stop) were written after the
+first critic run and are skipped by default, so no prompt is tuned on them. Tune on the main set, then run
+`uv run python scripts/golden_critics.py --heldout` once and report both. Scoring counts a finding for a
+flaw when the flaw's quote is on the cited line, or within `LINE_SLACK` lines of it when the finding hits
+no flaw exactly; report the exact-line numbers next to the lenient ones.

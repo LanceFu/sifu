@@ -1,6 +1,7 @@
 """Score the critics on the golden set with the real models.
 
-    uv run python scripts/golden_critics.py                 # every case in golden/code
+    uv run python scripts/golden_critics.py                 # the tuning cases in golden/code
+    uv run python scripts/golden_critics.py --heldout       # the held-out cases only
     uv run python scripts/golden_critics.py --only demo1_day_plan_limit
 
 Each case's patch is applied to a fresh clone of the product repo at the case's base commit, the
@@ -20,7 +21,7 @@ from pathlib import Path
 
 from sifu.config import load_config
 from sifu.critic import review_worktree
-from sifu.golden import load_cases, score_case, summarize
+from sifu.golden import is_heldout, load_cases, score_case, summarize
 from sifu.llm import OllamaLLM
 from sifu.verify import added_lines
 
@@ -34,6 +35,11 @@ def git(*args: str, cwd: Path | None = None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", action="append", help="a case name (repeatable)")
+    parser.add_argument(
+        "--heldout",
+        action="store_true",
+        help="run only the held-out cases; without it they are skipped so they stay unseen",
+    )
     args = parser.parse_args()
     cfg = load_config(ROOT / "config.yaml")
     llm = OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
@@ -41,7 +47,10 @@ def main() -> None:
     checker = cfg.critic.confirm_model or cfg.models.author
 
     scores, records = [], []
-    for case in load_cases(only=args.only):
+    cases = load_cases(only=args.only)
+    if not args.only:  # naming a case runs it; otherwise tuning and held-out sets stay apart
+        cases = [c for c in cases if is_heldout(c.name) == args.heldout]
+    for case in cases:
         with tempfile.TemporaryDirectory() as tmp:
             tree = Path(tmp) / "repo"
             git("clone", "-q", "--no-hardlinks", str(product), str(tree))

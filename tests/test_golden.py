@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from sifu.critic import review_worktree
-from sifu.golden import GOLDEN_DIR, load_cases, score_case, summarize
+from sifu.golden import GOLDEN_DIR, is_heldout, load_cases, score_case, summarize
 from sifu.verify import added_lines
 from tests.fakes import FakeLLM
 
@@ -27,7 +27,9 @@ def test_the_shipped_cases_load_and_their_patches_exist():
     assert {c.name for c in cases} >= {"demo1_day_plan_limit", "clean_stop_duration"}
     for c in cases:
         assert c.spec_path.is_file() and c.patch_path.is_file() and c.base
-    assert [c.clean for c in cases if c.name.startswith("clean_")] == [True, True]
+    clean = [c for c in cases if c.name.startswith("clean_")]
+    assert len(clean) >= 2 and all(c.clean for c in clean)
+    assert all(not c.clean for c in cases if not c.name.startswith("clean_"))
     assert GOLDEN_DIR.is_dir()
 
 
@@ -38,6 +40,17 @@ def test_a_flaw_is_detected_by_a_finding_on_a_line_holding_its_quote():
     assert score.detected == {"off_by_one": True, "coordinates_in_log": True, "extra_api": False}
     assert score.by_expected_critic["off_by_one"] and score.by_expected_critic["coordinates_in_log"]
     assert score.false_positives == []
+
+
+def test_a_finding_that_cites_a_line_next_to_the_quote_still_detects_the_flaw():
+    # models often cite the signature or body line beside the one the label quotes
+    near = score_case(case("demo1_day_plan_limit"), [finding(20)], INDEX)
+    assert near.detected["off_by_one"] and near.false_positives == []
+    far = score_case(case("demo1_day_plan_limit"), [finding(28)], INDEX)
+    assert not any(far.detected.values()) and len(far.false_positives) == 1
+    # a finding exactly on one flaw's quote does not also claim a flaw two lines away
+    exact = score_case(case("demo1_day_plan_limit"), [finding(25, "major", "security")], INDEX)
+    assert exact.detected["coordinates_in_log"] and not exact.detected["off_by_one"]
 
 
 def test_a_finding_that_matches_no_flaw_is_a_false_positive_and_blockers_are_counted():
@@ -64,6 +77,7 @@ def test_any_finding_on_a_clean_case_is_a_false_positive_and_the_summary_adds_up
     total = summarize([clean, seeded])
     assert total["flaws"] == 3 and total["detected"] == 1 and total["detection_rate"] == 0.333
     assert total["false_positives"] == 1 and total["clean_cases_with_findings"] == 1
+    assert total["clean_first_pass_rate"] == 0.0  # the one clean case got a blocker
 
 
 @pytest.mark.parametrize("name", ["demo1_day_plan_limit", "demo2_stop_duration"])
@@ -113,3 +127,16 @@ def test_the_review_pipeline_runs_on_a_patched_tree(tmp_path):
         ("A.swift", 2, "blocker")
     ]
     assert result.degraded == [] and result.index["A.swift"][2] == "if count > 10 {"
+
+
+def test_every_seeded_flaw_quote_of_every_case_is_in_its_patch():
+    for c in load_cases():
+        patch = c.patch_path.read_text(encoding="utf-8")
+        for flaw in c.expected:
+            assert any(q in patch for q in flaw.quotes), f"{c.name}: {flaw.id}"
+
+
+def test_held_out_cases_exist_in_both_kinds_and_are_kept_apart():
+    held = [c for c in load_cases() if is_heldout(c.name)]
+    assert sum(c.clean for c in held) >= 2 and sum(not c.clean for c in held) >= 2
+    assert not any(is_heldout(c.name) for c in load_cases(only=["demo1_day_plan_limit"]))

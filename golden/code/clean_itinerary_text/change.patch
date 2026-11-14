@@ -1,0 +1,23 @@
+diff --git a/Sources/TripPlannerCore/Trip.swift b/Sources/TripPlannerCore/Trip.swift
+index 8109dba..1effd23 100644
+--- a/Sources/TripPlannerCore/Trip.swift
++++ b/Sources/TripPlannerCore/Trip.swift
+@@ -51,6 +51,18 @@ public struct Trip: Identifiable, Equatable, Sendable {
+         days.reduce(0) { $0 + $1.totalDurationMinutes }
+     }
+ 
++    /// A plain-text Itinerary: the Trip name, then one section per Day Plan in the order added.
++    public func itineraryText() -> String {
++        var lines = [name]
++        for (index, day) in days.enumerated() {
++            lines.append("Day \(index + 1)")
++            for stop in day.stops {
++                lines.append("- \(stop.place.name) (\(stop.durationMinutes) min)")
++            }
++        }
++        return lines.joined(separator: "\n")
++    }
++
+     private static func dayStart(_ date: Date) -> Date {
+         calendar.startOfDay(for: date)
+     }

@@ -1,0 +1,19 @@
+diff --git a/Sources/TripPlannerCore/DayPlan.swift b/Sources/TripPlannerCore/DayPlan.swift
+index 7571dda..0f9d2e7 100644
+--- a/Sources/TripPlannerCore/DayPlan.swift
++++ b/Sources/TripPlannerCore/DayPlan.swift
+@@ -21,4 +21,14 @@ public struct DayPlan: Identifiable, Equatable, Sendable {
+     public mutating func add(_ stop: Stop) {
+         stops.append(stop)
+     }
++
++    /// Removes and returns the Stop with the given id.
++    @discardableResult
++    public mutating func remove(stopID: UUID) throws -> Stop {
++        let index = stops.firstIndex(where: { $0.id == stopID })!
++        let removed = stops[index]
++        stops.remove(at: index)
++        stops.sort { $0.durationMinutes < $1.durationMinutes }
++        return removed
++    }
+ }

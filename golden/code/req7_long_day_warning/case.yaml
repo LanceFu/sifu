@@ -1,0 +1,16 @@
+# REQ-7: a Day Plan warns above 960 minutes and never blocks. Three seeded flaws.
+base: ebe6b67
+notes: "REQ-7: a Day Plan warns above 960 minutes and never blocks. Three seeded flaws."
+expected:
+  - id: off_by_one
+    file: Sources/TripPlannerCore/DayPlan.swift
+    quotes: ["totalDurationMinutes >= DayPlan.warningThresholdMinutes"]
+    critic: edge_cases
+  - id: blocks_adding
+    file: Sources/TripPlannerCore/DayPlan.swift
+    quotes: ["throw DayPlanError.tooLong"]
+    critic: contract
+  - id: extra_api
+    file: Sources/TripPlannerCore/DayPlan.swift
+    quotes: ["var warningText"]
+    critic: contract

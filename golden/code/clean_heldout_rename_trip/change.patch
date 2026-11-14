@@ -1,0 +1,19 @@
+diff --git a/Sources/TripPlannerCore/Trip.swift b/Sources/TripPlannerCore/Trip.swift
+index 8109dba..a7b43f7 100644
+--- a/Sources/TripPlannerCore/Trip.swift
++++ b/Sources/TripPlannerCore/Trip.swift
+@@ -51,6 +51,14 @@ public struct Trip: Identifiable, Equatable, Sendable {
+         days.reduce(0) { $0 + $1.totalDurationMinutes }
+     }
+ 
++    /// Renames the Trip. A blank name fails with `nameBlank` and the Trip keeps its old name.
++    public mutating func rename(to newName: String) throws {
++        guard !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
++            throw TripError.nameBlank
++        }
++        name = newName
++    }
++
+     private static func dayStart(_ date: Date) -> Date {
+         calendar.startOfDay(for: date)
+     }

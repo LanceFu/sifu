@@ -71,6 +71,16 @@ def load_cases(root: Path = GOLDEN_DIR, only: list[str] | None = None) -> list[C
     return cases
 
 
+# A finding counts for a flaw when the flaw's quote is on the cited line or this many lines either
+# side: models often cite the signature or body line next to the one a label quotes.
+LINE_SLACK = 2
+
+
+def is_heldout(name: str) -> bool:
+    """Held-out cases were written after the first critic run and never used to tune a prompt."""
+    return "heldout" in name
+
+
 def _squash(text: str) -> str:
     return " ".join(text.split())
 
@@ -80,13 +90,23 @@ def score_case(
 ) -> CaseScore:
     """Score merged findings against the case's seeded flaws."""
     score = CaseScore(case.name, case.clean)
+
+    def quoted(flaw: Flaw, f: dict[str, Any], slack: int) -> bool:
+        lines = index.get(f["file"], {})
+        near = range(f["line"] - slack, f["line"] + slack + 1)
+        text = " | ".join(_squash(lines.get(n, "")) for n in near)
+        return f["file"] == flaw.file and any(_squash(q) in text for q in flaw.quotes)
+
+    # a finding whose own line holds a flaw's quote counts for that flaw only; the slack applies
+    # to findings that hit no flaw exactly, so one finding in dense code cannot claim its neighbours
+    exact = {i for i, f in enumerate(findings) for fl in case.expected if quoted(fl, f, 0)}
     matched: set[int] = set()
     for flaw in case.expected:
-        hits = []
-        for i, f in enumerate(findings):
-            text = _squash(index.get(f["file"], {}).get(f["line"], ""))
-            if f["file"] == flaw.file and any(_squash(q) in text for q in flaw.quotes):
-                hits.append(i)
+        hits = [
+            i
+            for i, f in enumerate(findings)
+            if quoted(flaw, f, 0) or (i not in exact and quoted(flaw, f, LINE_SLACK))
+        ]
         matched.update(hits)
         score.detected[flaw.id] = bool(hits)
         score.by_expected_critic[flaw.id] = any(
@@ -112,4 +132,10 @@ def summarize(scores: list[CaseScore]) -> dict[str, Any]:
         "blocker_false_positives": sum(s.blocker_false_positives for s in scores),
         "clean_cases": len(clean),
         "clean_cases_with_findings": sum(1 for s in clean if s.false_positives),
+        # Share of clean changes the critics let through without a blocker, i.e. no round trip.
+        "clean_first_pass_rate": (
+            round(sum(1 for s in clean if not s.blocker_false_positives) / len(clean), 3)
+            if clean
+            else None
+        ),
     }
