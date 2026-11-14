@@ -27,3 +27,76 @@ index 03691d6..62989ac 100644
 +public enum StopError: Error, Equatable {
 +    case invalidDuration
  }
+diff --git a/Tests/TripPlannerCoreTests/DayPlanTests.swift b/Tests/TripPlannerCoreTests/DayPlanTests.swift
+index e96e0a7..2b013b9 100644
+--- a/Tests/TripPlannerCoreTests/DayPlanTests.swift
++++ b/Tests/TripPlannerCoreTests/DayPlanTests.swift
+@@ -9,19 +9,19 @@ final class DayPlanTests: XCTestCase {
+         XCTAssertEqual(DayPlan(date: date).totalDurationMinutes, 0)
+     }
+ 
+-    func testStopsKeepTheOrderTheyWereAdded() {
++    func testStopsKeepTheOrderTheyWereAdded() throws {
+         var plan = DayPlan(date: date)
+-        let first = Stop(place: castle, durationMinutes: 30)
+-        let second = Stop(place: castle, durationMinutes: 60)
++        let first = try Stop(place: castle, durationMinutes: 30)
++        let second = try Stop(place: castle, durationMinutes: 60)
+         plan.add(first)
+         plan.add(second)
+         XCTAssertEqual(plan.stops.map(\.id), [first.id, second.id])
+     }
+ 
+-    func testTotalDurationSumsStops() {
++    func testTotalDurationSumsStops() throws {
+         var plan = DayPlan(date: date)
+-        plan.add(Stop(place: castle, durationMinutes: 30))
+-        plan.add(Stop(place: castle, durationMinutes: 60))
++        try plan.add(Stop(place: castle, durationMinutes: 30))
++        try plan.add(Stop(place: castle, durationMinutes: 60))
+         XCTAssertEqual(plan.totalDurationMinutes, 90)
+     }
+ }
+diff --git a/Tests/TripPlannerCoreTests/TripTests.swift b/Tests/TripPlannerCoreTests/TripTests.swift
+index a452f0c..d92aae4 100644
+--- a/Tests/TripPlannerCoreTests/TripTests.swift
++++ b/Tests/TripPlannerCoreTests/TripTests.swift
+@@ -11,7 +11,7 @@ final class TripTests: XCTestCase {
+         return try Trip(name: "Lisbon", startDate: start, endDate: end)
+     }
+ 
+-    func testRejectsEndDateBeforeStartDate() {
++    func testRejectsEndDateBeforeStartDate() throws {
+         XCTAssertThrowsError(
+             try Trip(name: "Oops", startDate: start, endDate: start.addingTimeInterval(-oneDay))
+         ) { error in
+@@ -19,7 +19,7 @@ final class TripTests: XCTestCase {
+         }
+     }
+ 
+-    func testRejectsEmptyNameWithNameBlankError() {
++    func testRejectsEmptyNameWithNameBlankError() throws {
+         var trip: Trip?
+         XCTAssertThrowsError(trip = try Trip(name: "", startDate: start, endDate: start)) { error in
+             XCTAssertEqual(error as? TripError, .nameBlank)
+@@ -27,7 +27,7 @@ final class TripTests: XCTestCase {
+         XCTAssertNil(trip)
+     }
+ 
+-    func testRejectsWhitespaceOnlyNameWithNameBlankError() {
++    func testRejectsWhitespaceOnlyNameWithNameBlankError() throws {
+         var trip: Trip?
+         XCTAssertThrowsError(trip = try Trip(name: " \t\n  ", startDate: start, endDate: start)) { error in
+             XCTAssertEqual(error as? TripError, .nameBlank)
+@@ -57,9 +57,9 @@ final class TripTests: XCTestCase {
+     func testTotalDurationSumsEveryDayPlan() throws {
+         var trip = try makeTrip()
+         var first = DayPlan(date: start)
+-        first.add(Stop(place: castle, durationMinutes: 90))
++        try first.add(Stop(place: castle, durationMinutes: 90))
+         var second = DayPlan(date: start.addingTimeInterval(oneDay))
+-        second.add(Stop(place: castle, durationMinutes: 45))
++        try second.add(Stop(place: castle, durationMinutes: 45))
+         try trip.addDay(first)
+         try trip.addDay(second)
+         XCTAssertEqual(trip.totalDurationMinutes, 135)
