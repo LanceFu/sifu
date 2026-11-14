@@ -1,13 +1,6 @@
 # Lessons proposed for tripplanner-ios conventions.md, each from a failure seen in a real run.
 # Evidence is a block scalar (>-), so a "#" in it is text, not a comment.
 - lesson: >-
-    When a change makes an existing initializer or method throw, update every caller in the same
-    change, tests included, so the test target still compiles.
-  evidence: >-
-    Nov 14 verify pass on the critic golden set: 5 of 10 patches made Stop.init or DayPlan.add
-    throw without updating DayPlanTests.swift and TripTests.swift, so swift test failed to compile
-    ('call can throw but is not marked with try').
-- lesson: >-
     No force casts (`as!`); use `as?` with a guard that throws a case of the typed Error enum.
   evidence: >-
     PR #4 (Sifu ticket 1): SwiftLint force_cast at Sources/TripPlannerCore/DayPlan.swift:39 was
