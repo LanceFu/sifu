@@ -28,6 +28,7 @@ from sifu.evalrun import (
 )
 from sifu.evalset import load_tickets
 from sifu.llm import OllamaLLM
+from sifu.provenance import finish_stamp, git_stamp, print_provenance
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,6 +65,7 @@ def main() -> None:
         raise SystemExit(1 if problems else 0)
 
     llm = OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
+    start = {"sifu": git_stamp(ROOT), "product": git_stamp(repo)}
     per_system = {}
     if args.system in ("swarm", "both"):
         with tempfile.TemporaryDirectory() as tmp:
@@ -74,8 +76,12 @@ def main() -> None:
         per_system["baseline"] = run_baseline(tickets, cfg, llm, ctx, repeats=args.repeats)
 
     out_dir = ROOT / cfg.workspace.artifacts_dir / "eval"
-    path, table = write_results(out_dir, args.label, tickets, per_system, cfg)
+    provenance = {
+        name: finish_stamp(s, ROOT if name == "sifu" else repo) for name, s in start.items()
+    }
+    path, table = write_results(out_dir, args.label, tickets, per_system, cfg, provenance)
     print("\n" + table)
+    print_provenance(provenance)
     print("\nWrote", path)
 
 

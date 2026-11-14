@@ -223,8 +223,12 @@ def write_results(
     tickets: list[GoldenTicket],
     per_system: dict[str, list[dict[str, Any]]],
     cfg: Config,
+    provenance: dict[str, Any] | None = None,
 ) -> tuple[Path, str]:
-    """Summarize each system, write one JSON file and return its path and the markdown table."""
+    """Summarize each system, write one JSON file and return its path and the markdown table.
+
+    ``provenance`` is the git stamp of each repo that shaped the run (see ``sifu.provenance``).
+    """
     summaries, scores = {}, {}
     for name, records in per_system.items():
         summaries[name], scores[name] = summarize(tickets, records)
@@ -234,6 +238,7 @@ def write_results(
     payload = {
         "label": label,
         "config": models_snapshot(cfg),
+        "provenance": provenance or {},
         "summaries": summaries,
         "records": per_system,
         "scores": {n: [vars(s) for s in v] for n, v in scores.items()},

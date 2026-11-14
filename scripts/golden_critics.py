@@ -23,6 +23,7 @@ from sifu.config import load_config
 from sifu.critic import review_worktree
 from sifu.golden import is_heldout, load_cases, score_case, summarize
 from sifu.llm import OllamaLLM
+from sifu.provenance import finish_stamp, git_stamp, print_provenance
 from sifu.verify import added_lines
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,7 @@ def main() -> None:
     llm = OllamaLLM(cfg.ollama.base_url, cfg.ollama.num_ctx)
     product = Path(cfg.workspace.product_repo_path).expanduser()
     checker = cfg.critic.confirm_model or cfg.models.author
+    start = {"sifu": git_stamp(ROOT), "product": git_stamp(product)}
 
     scores, records = [], []
     cases = load_cases(only=args.only)
@@ -88,7 +90,12 @@ def main() -> None:
     out = ROOT / "data" / "artifacts" / "golden"
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"critics-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    path.write_text(json.dumps({"summary": summary, "cases": records}, indent=2), encoding="utf-8")
+    provenance = {
+        name: finish_stamp(s, ROOT if name == "sifu" else product) for name, s in start.items()
+    }
+    print_provenance(provenance)
+    payload = {"provenance": provenance, "summary": summary, "cases": records}
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print("Wrote", path)
 
 

@@ -288,6 +288,10 @@ def test_write_results_makes_one_file_with_a_summary_per_system(ctx, cfg, tmp_pa
     assert set(data["summaries"]) == {"swarm", "baseline"} and data["label"] == "unit"
     assert data["config"]["models"]["author"] == cfg.models.author
     assert "| Metric | swarm | baseline |" in table
+    assert data["provenance"] == {}  # stamped by the script; empty when none is passed
+    stamp = {"sifu": {"commit": "abc", "dirty": False, "changed_during_run": False}}
+    path, _ = write_results(tmp_path, "unit2", tickets, {"swarm": [record()]}, cfg, stamp)
+    assert json.loads(path.read_text())["provenance"] == stamp
 
 
 def test_overrides_change_nested_config_values_and_reject_bad_ones():
