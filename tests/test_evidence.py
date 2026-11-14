@@ -72,12 +72,16 @@ def test_a_pipe_in_a_finding_does_not_break_the_table(recorded):
     assert "avoided \\| use as?" in table
 
 
-def test_decisions_table_shows_tier_rules_assessors_and_resolution(recorded):
-    table = evidence.decisions_table(evidence.open_recorded(recorded))
+def test_decisions_table_has_tier_rules_and_resolution_and_fits_a_page(recorded):
+    table, _, notes = evidence.decisions_table(evidence.open_recorded(recorded)).partition("\n\n")
     row = table.splitlines()[-1]
-    assert "| merge | HUMAN | HUMAN | `manual_merge_mode` |" in row
-    assert "gemma4: AUTO. Small change." in row
-    assert row.rstrip().endswith("| human_approved |")
+    assert row == "| 1 | 1 | merge | HUMAN | HUMAN | `manual_merge_mode` | human_approved |"
+    assert "Small change." not in table  # long rationales would squeeze the table off the page
+
+
+def test_assessor_rationales_follow_the_decisions_table_as_a_list(recorded):
+    _, _, notes = evidence.decisions_table(evidence.open_recorded(recorded)).partition("\n\n")
+    assert notes == "- Decision 1, gemma4: AUTO. Small change."
 
 
 def test_pr_table_links_each_pull_request_event(recorded):

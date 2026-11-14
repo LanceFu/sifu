@@ -81,30 +81,36 @@ def _tier(value: Any) -> str:
 
 
 def decisions_table(conn: sqlite3.Connection) -> str:
-    """One row per router decision: floor and final tier, rules, assessors and the resolution."""
-    rows = []
+    """One row per router decision, then each assessor's rationale as a list under the table.
+
+    The rationales are full sentences, so they sit below the table instead of in a column:
+    inside it they squeeze the other columns off a printed page.
+    """
+    rows, notes = [], []
     for d in conn.execute("SELECT * FROM decisions ORDER BY id").fetchall():
         rules = ", ".join(f"`{r}`" for r in json.loads(d["rules_fired"])) or "none"
-        assessors = "<br>".join(
-            _cell(f"{a['assessor']}: {_tier(a['tier'])}. {a['rationale']}")
-            for a in json.loads(d["assessments"])
-        )
         rows.append(
             [
+                str(d["id"]),
                 str(d["ticket_id"]),
                 d["decision_type"],
                 _tier(d["floor_tier"]),
                 _tier(d["final_tier"]),
                 rules,
-                assessors or "not asked",
                 d["resolution"],
             ]
         )
-    return _table(
-        ["Ticket", "Decision", "Floor", "Final", "Rules fired", "Assessors", "Resolution"],
+        notes += [
+            f"- Decision {d['id']}, {a['assessor']}: {_tier(a['tier'])}. "
+            + str(a["rationale"]).replace("\n", " ")
+            for a in json.loads(d["assessments"])
+        ]
+    table = _table(
+        ["Decision", "Ticket", "Type", "Floor", "Final", "Rules fired", "Resolution"],
         rows,
         "no decisions",
     )
+    return table + ("\n\n" + "\n".join(notes) if notes else "")
 
 
 def pr_table(conn: sqlite3.Connection) -> str:
