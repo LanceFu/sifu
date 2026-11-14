@@ -267,3 +267,31 @@ def test_demo_helpers_pause_and_resume_the_protected_ticket(tmp_path, cfg, monke
     [request] = db.open_requests(deps.conn)
     demo.answer_request(deps, request["id"], "approve")
     assert db.get_ticket(deps.conn, ids["protected_path"])["status"] == "spec"
+
+
+def test_answer_in_database_resumes_from_the_file_and_stops_before_build(
+    tmp_path, cfg, monkeypatch, capsys
+):
+    from sifu import demo
+
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "docs" / "glossary.yaml").write_text("terms: []\nout_of_scope: []\n")
+    (repo / "docs" / "PRD.md").write_text("PRD")
+    cfg.workspace.product_repo_path = str(repo)
+    monkeypatch.setattr(demo, "ROOT", tmp_path)
+    path = str(tmp_path / "d.db")
+    deps, project = demo.open_demo(cfg, FakeLLM(), path)
+    ids = demo.run_router_demo(deps, project, keys=("protected_path",))
+    [request] = db.open_requests(deps.conn)
+    deps.conn.close()
+
+    cfg.planner.enabled = True  # the live default; the UI must not run the stub Build
+    status_after = demo.answer_in_database(path, request["id"], "approve", cfg=cfg, llm=FakeLLM())
+
+    assert status_after == "spec"
+    check = db.connect(path)
+    assert db.open_requests(check) == []
+    kinds = [e["kind"] for e in db.list_events(check, ids["protected_path"])]
+    assert "spec_accepted" in kinds and "stub_ran" not in kinds
+    assert cfg.planner.enabled is True  # the caller's config is left alone

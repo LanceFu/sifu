@@ -131,6 +131,32 @@ def answer_request(deps: Deps, request_id: int, answer: str) -> dict[str, Any]:
     return state
 
 
+def answer_in_database(
+    db_path: str | Path,
+    request_id: int,
+    answer: str,
+    cfg: Config | None = None,
+    llm: LLM | None = None,
+) -> str:
+    """Answer an open request in a database file and return the ticket's new status.
+
+    This is what the UI's inbox calls. It has no implementer, verifier or GitHub client, so the
+    planner is switched off for the call: an approved spec stops at the plan gate instead of
+    running the stub Build. Requests past the Design stage go through ``scripts/live_run.py``.
+    """
+    cfg = (cfg or load_config(ROOT / "config.yaml")).model_copy(deep=True)
+    cfg.planner.enabled = False
+    deps, _ = open_demo(cfg, llm, str(db_path))
+    try:
+        ticket_id = deps.conn.execute(
+            "SELECT ticket_id FROM human_requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        answer_request(deps, request_id, answer)
+        return str(db.get_ticket(deps.conn, ticket_id["ticket_id"])["status"])
+    finally:
+        deps.conn.close()
+
+
 def _print_row(row: dict[str, Any], events: list[Any]) -> None:
     mark = "ok " if row["outcome"] == row["expected"] else "!! "
     print(

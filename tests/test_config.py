@@ -38,3 +38,23 @@ def test_env_var_switches_the_backend_for_one_run(monkeypatch):
     monkeypatch.setenv("SIFU_IMPLEMENTER_BACKEND", "lmstudio")
     with pytest.raises(ValueError):
         load_config(ROOT / "config.yaml")
+
+
+def test_readme_lists_every_config_option():
+    from pathlib import Path
+
+    from pydantic import BaseModel
+
+    from sifu.config import Config
+
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    missing = []
+    for section, field in Config.model_fields.items():
+        model = field.annotation
+        assert isinstance(model, type) and issubclass(model, BaseModel)
+        missing += [
+            f"{section}.{name}"
+            for name in model.model_fields
+            if f"`{section}.{name}`" not in readme
+        ]
+    assert missing == []

@@ -10,11 +10,12 @@ Course project for Agentic AI (University of Waterloo). The target product is th
 | Piece | State |
 | --- | --- |
 | Config, models, SQLite schema, state machine, risk router floor rules | Done |
-| LangGraph ticket graph and Design stage (deterministic checks, three parallel reviewers, synthesizer) | Done; tested with a fake model, real Ollama run pending |
-| Risk router wiring (two assessors), pause and resume, lessons, FastMCP tools, caps, headless implementer | Done; tested with a fake model, real runs pending |
-| FastMCP server, GitHub PR flow, Claude Code implementer node | Later |
-| Evaluation harness (golden set vs single-prompt baseline) | Built and tested with fake models; real runs pending (see Evaluation) |
-| Streamlit UI | Later |
+| Design stage (deterministic checks, three parallel reviewers, synthesizer) | Done; run on real Ollama |
+| Risk router (two assessors), pause and resume, lessons, FastMCP tools, caps | Done; run on real Ollama |
+| Planner, headless Claude Code implementer, verify loop, GitHub PR and merge flow | Done; run live on `tripplanner-ios` (PRs #2 to #5) |
+| LLM critic pass | Done; off by default (`critic.enabled`) |
+| Evaluation (golden tickets against a single-prompt baseline, golden diffs for the critics) | Done; results in the notebook |
+| Streamlit UI (board, ticket timeline, inbox) | Done; see Streamlit UI |
 
 ## Setup
 
@@ -53,14 +54,77 @@ named by `github.keychain_service` in `config.yaml`. macOS may ask you to allow 
 ## Layout
 
 ```
-config.yaml          model names, implementer backend, router and GitHub settings
-src/sifu/models.py   enums and Pydantic models for findings, assessments and decisions
-src/sifu/state.py    ticket state machine and stage gates
-src/sifu/router.py   floor rules and the final tier
-src/sifu/db.py       SQLite tables: projects, tickets, events, decisions, human_requests, runs
-tests/               pytest suite for the deterministic parts
-notebooks/           demo notebook for the course submission
+config.yaml            every setting; see Configuration
+src/sifu/models.py     enums and Pydantic models for findings, assessments and decisions
+src/sifu/state.py      ticket state machine and stage gates
+src/sifu/router.py     floor rules and the final tier
+src/sifu/db.py         SQLite tables: projects, tickets, events, decisions, human_requests, runs
+src/sifu/graph.py      the LangGraph ticket graph: every node and edge
+src/sifu/reviewers.py, synthesizer.py, planner.py, critic.py, assessors.py   the model agents
+src/sifu/implementer.py, verify.py, pr_flow.py, github.py                    Build, Test and merge
+src/sifu/evalset.py, evalrun.py, baseline.py, golden.py, report.py           evaluation
+src/sifu/evidence.py   notebook tables read from a recorded database
+src/sifu/ui_data.py, ui.py   the Streamlit UI and the queries behind it
+src/sifu/prompts/      persona, rubric and few-shot files for each agent
+scripts/               live runs, probes and the evaluation harness
+golden/, seed/         labelled tickets and diffs
+tests/                 pytest suite (fake models, no network)
+notebooks/             demo notebook for the course submission
 ```
+
+## Configuration
+
+Everything is set in `config.yaml` and validated by `src/sifu/config.py`. Options marked
+"default" may be left out of the file.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `ollama.base_url` | `http://localhost:11434` | Where Ollama runs. |
+| `ollama.num_ctx` | `65536` | Context window for every model call. |
+| `ollama.num_predict` | `8192` | Most output tokens per reply, thinking included. Stops a looping model. |
+| `models.author` | required | Model for the spec writer and the planner. |
+| `models.spec_reviewer` | required | Model for the three Design-stage reviewers. |
+| `models.code_reviewer` | required | Model for the critics. Use a different family from the author. |
+| `models.risk_assessors` | required | One or more models that assess each decision. Two families make agreement a real signal. |
+| `implementer.backend` | `cloud` | `cloud` or `ollama`. `SIFU_IMPLEMENTER_BACKEND` overrides it for one run. |
+| `implementer.cloud_model` | none | Claude Code model for the cloud backend; none means its default. |
+| `implementer.ollama_model` | `qwen3-coder:30b` | Local model for the `ollama` backend. |
+| `implementer.max_turns` | `30` | Turn cap for one headless Claude Code run. |
+| `implementer.timeout_seconds` | `1800` | Time limit for one implementer run. |
+| `implementer.allowed_tools` | empty | Tools Claude Code may use; anything else is denied. |
+| `planner.enabled` | `false` | Write `plan.md` after the spec is accepted and gate Build on it. |
+| `planner.listing_cap` | `150` | File names shown to the planner. |
+| `planner.excerpt_chars` | `3000` | Characters shown per file. |
+| `planner.total_chars` | `15000` | Characters of excerpts in total. |
+| `critic.enabled` | `false` | Run the LLM critics after verify passes. |
+| `critic.names` | `edge_cases, contract, security` | Which critics run. |
+| `critic.max_diff_chars` | `24000` | Diff size shown to a critic. |
+| `critic.min_scenario_words` | `6` | Shortest failing scenario a finding may give. |
+| `critic.confirm_blockers` | `true` | A second model re-reads each blocker against nearby lines. |
+| `critic.confirm_model` | none | Model for that check; none means `models.author`. |
+| `critic.context_lines` | `6` | Unchanged lines shown around each change. |
+| `verify.steps` | empty | Commands Sifu runs after each implementer run, in order: `name`, `command`, `parser` (`compiler`, `swiftlint_json` or `generic`). Empty makes the stage a stub. |
+| `verify.timeout_seconds` | `900` | Time limit per step. |
+| `verify.max_findings` | `20` | Findings sent back to the implementer per round. |
+| `verify.extra_allowed_paths` | `Tests/` | Paths the implementer may touch beyond the spec's list. |
+| `router.merge_mode` | `risk_based` | `manual`, `risk_based` or `auto`. Floor rules apply in every mode. |
+| `router.max_build_iterations` | `3` | Build and verify rounds before the ticket goes to a human. |
+| `router.max_design_rounds` | `3` | Clarification rounds before the ticket fails. |
+| `router.max_tokens_per_ticket` | `400000` | Model tokens per ticket before it fails. |
+| `router.protected_paths` | empty | Files and folders that always need a human. A trailing slash covers a folder. |
+| `github.repo` | required | The product repository, `owner/name`. |
+| `github.token_env` | `SIFU_GITHUB_TOKEN` | Environment variable checked first for the token. |
+| `github.keychain_service` | `sifu-github-token` | macOS Keychain item used otherwise. |
+| `github.base_branch` | `main` | Branch pull requests target. |
+| `github.required_check` | `test` | The Actions check Sifu waits for before the merge decision. |
+| `github.ci_timeout_seconds` | `600` | How long to wait for that check. |
+| `github.ci_poll_seconds` | `15` | How often to poll it. |
+| `github.merge_method` | `squash` | `squash`, `merge` or `rebase`. |
+| `github.commit_name`, `github.commit_email` | `Sifu`, `sifu@users.noreply.github.com` | Identity on Sifu's commits. |
+| `workspace.product_repo_path` | required | Local clone of the product repository. |
+| `workspace.worktrees_dir` | required | Where per-ticket git worktrees are made. |
+| `workspace.artifacts_dir` | `data/artifacts` | Where `spec.md`, `plan.md` and results files go. |
+| `database.path` | `data/sifu.db` | The SQLite database. |
 
 ## Design stage
 
@@ -224,3 +288,27 @@ first critic run and are skipped by default, so no prompt is tuned on them. Tune
 flaw when the flaw's quote is on the cited line, or within `LINE_SLACK` lines of it when the finding hits
 no flaw exactly. The summary gives both: `detection_rate` with the window and `detection_rate_exact`
 without it; report them side by side.
+
+## Streamlit UI
+
+```bash
+uv run --extra agents --extra ui streamlit run src/sifu/ui.py
+```
+
+Pick a database from `data/` in the sidebar (set `SIFU_UI_DB` to open one first). The app reads
+it read-only and has three views:
+
+- **Board:** tickets by status, each with its pull request link.
+- **Ticket:** one ticket's timeline. Router decisions show the floor and final tier, the rules
+  that fired and each assessor's rationale. "Key events only" hides tool calls and status changes.
+- **Inbox:** open human requests. A Design-stage request is answered there (`approve`, `close`
+  or a typed reply) and the ticket resumes from its checkpoint with the planner off, so it stops
+  before Build. A plan or merge decision shows the `scripts/live_run.py --answer` command
+  instead, because resuming it needs the real implementer and GitHub client.
+
+## Recorded runs in the notebook
+
+`sifu.evidence.build_test_evidence(path)` renders one recorded database (`data/live.db`,
+`data/probe-once.db`, `data/probe-always.db`) as Markdown: verify rounds, router decisions and
+pull request events. It opens the file read-only and calls neither a model nor GitHub. The
+databases are git-ignored, so keep a copy: they are the only local record of those live runs.
