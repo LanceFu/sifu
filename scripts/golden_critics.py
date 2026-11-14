@@ -3,10 +3,13 @@
     uv run python scripts/golden_critics.py                 # the tuning cases in golden/code
     uv run python scripts/golden_critics.py --heldout       # the held-out cases only
     uv run python scripts/golden_critics.py --only demo1_day_plan_limit
+    uv run python scripts/golden_critics.py --checks-only   # Sifu's verify steps only, no model
 
-Each case's patch is applied to a fresh clone of the product repo at the case's base commit, the
-critic pass runs exactly as in the graph, and the merged findings are scored against the seeded
-flaws. Prints a table and writes a JSON record to data/artifacts/golden/ (not committed).
+Each case's patch is applied to a fresh clone of the product repo at the case's base commit. Sifu's
+own verify steps (diff checks, swift build, SwiftLint, swift test) run first, as in the graph, then
+the critic pass, and both are scored against the seeded flaws: the summary shows which flaws the
+deterministic checks already catch and which only a critic found. Prints a table and writes a
+JSON record to data/artifacts/golden/ (not committed).
 """
 
 from __future__ import annotations
@@ -20,11 +23,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 from sifu.config import load_config
-from sifu.critic import review_worktree
-from sifu.golden import is_heldout, load_cases, score_case, summarize
+from sifu.critic import added_index, review_worktree
+from sifu.golden import is_heldout, load_cases, score_case, score_checks, summarize
 from sifu.llm import OllamaLLM
 from sifu.provenance import finish_stamp, git_stamp, print_provenance
-from sifu.verify import added_lines
+from sifu.verify import added_lines, run_verify
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,6 +43,10 @@ def main() -> None:
         "--heldout",
         action="store_true",
         help="run only the held-out cases; without it they are skipped so they stay unseen",
+    )
+    parser.add_argument("--no-verify", action="store_true", help="skip Sifu's verify steps")
+    parser.add_argument(
+        "--checks-only", action="store_true", help="run the verify steps only, no critic model"
     )
     args = parser.parse_args()
     cfg = load_config(ROOT / "config.yaml")
@@ -58,6 +65,18 @@ def main() -> None:
             git("clone", "-q", "--no-hardlinks", str(product), str(tree))
             git("checkout", "-q", case.base, cwd=tree)
             git("apply", str(case.patch_path.resolve()), cwd=tree)
+            added = added_lines(tree)
+            checks = None
+            if not args.no_verify:
+                touched = sorted({name for name, _, _ in added})
+                checks = run_verify(cfg, tree, touched)
+            if args.checks_only:
+                score = score_case(case, [], added_index(added))
+                score_checks(score, case, [asdict(f) for f in checks.findings], added_index(added))
+                scores.append(score)
+                print_checks(case.name, score, checks)
+                records.append({"score": asdict(score), "checks": checks.to_payload()})
+                continue
             review = review_worktree(
                 tree,
                 case.spec_path.read_text(encoding="utf-8"),
@@ -65,9 +84,12 @@ def main() -> None:
                 critic_cfg=cfg.critic,
                 critic_model=cfg.models.code_reviewer,
                 checker_model=checker,
-                added=added_lines(tree),
+                added=added,
             )
         score = score_case(case, review.merged, review.index)
+        if checks is not None:
+            score_checks(score, case, [asdict(f) for f in checks.findings], review.index)
+            print_checks(case.name, score, checks)
         scores.append(score)
         found = sum(score.detected.values())
         print(
@@ -84,7 +106,14 @@ def main() -> None:
                 f"  FALSE+  {fp['severity']:7} {fp['critic']} {fp['file']}:{fp['line']} "
                 f"{fp['message'][:80]}"
             )
-        records.append({"score": asdict(score), "dropped": review.dropped, "tokens": review.tokens})
+        records.append(
+            {
+                "score": asdict(score),
+                "dropped": review.dropped,
+                "tokens": review.tokens,
+                "checks": checks.to_payload() if checks is not None else None,
+            }
+        )
 
     summary = summarize(scores)
     print("\nSummary", json.dumps(summary))
@@ -98,6 +127,14 @@ def main() -> None:
     payload = {"provenance": provenance, "summary": summary, "cases": records}
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print("Wrote", path)
+
+
+def print_checks(name: str, score, checks) -> None:
+    steps = " ".join(f"{s['name']}={'ok' if s.get('ok') else 'FAIL'}" for s in checks.steps)
+    caught = [k for k, ok in score.caught_by_checks.items() if ok]
+    print(f"\n{name} checks: {steps}; caught {caught or 'none'}")
+    for f in score.unmapped_check_findings[:5]:
+        print(f"  UNMAPPED {f['source']} {f['file']}:{f['line']} {f['message'][:90]}")
 
 
 if __name__ == "__main__":

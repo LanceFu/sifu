@@ -143,3 +143,40 @@ def test_held_out_cases_exist_in_both_kinds_and_are_kept_apart():
     held = [c for c in load_cases() if is_heldout(c.name)]
     assert sum(c.clean for c in held) >= 2 and sum(not c.clean for c in held) >= 2
     assert not any(is_heldout(c.name) for c in load_cases(only=["demo1_day_plan_limit"]))
+
+
+def test_a_verify_finding_on_a_flaw_line_counts_as_caught_by_the_checks():
+    from sifu.golden import score_checks
+
+    c = case("demo1_day_plan_limit")
+    score = score_case(c, [finding(22), finding(25, "major", "security")], INDEX)
+    unmapped = {"source": "test", "file": "Tests/X.swift", "line": 3, "message": "failed"}
+    score_checks(score, c, [{"source": "swiftlint", "file": FILE, "line": 25}, unmapped], INDEX)
+    assert score.caught_by_checks == {
+        "off_by_one": False,
+        "coordinates_in_log": True,
+        "extra_api": False,
+    }
+    assert score.checks_ok is False and score.unmapped_check_findings == [unmapped]
+    total = summarize([score])
+    assert total["caught_by_checks"] == 1
+    assert total["found_beyond_checks"] == 1  # off_by_one: a critic found it, the checks did not
+    assert total["cases_failing_checks"] == 1
+
+
+def test_cases_without_a_verify_run_leave_the_check_fields_empty():
+    score = score_case(case("demo1_day_plan_limit"), [finding(22)], INDEX)
+    total = summarize([score])
+    assert score.checks_ok is None and total["caught_by_checks"] is None
+    assert total["found_beyond_checks"] is None
+
+
+def test_one_check_finding_on_a_flaw_line_does_not_also_claim_neighbouring_flaws():
+    from sifu.golden import score_checks
+
+    c = case("demo1_day_plan_limit")
+    dense = {FILE: {22: INDEX[FILE][22], 23: INDEX[FILE][25]}}  # two flaws on adjacent lines
+    score = score_case(c, [], dense)
+    score_checks(score, c, [{"source": "swiftlint", "file": FILE, "line": 23}], dense)
+    assert score.caught_by_checks["coordinates_in_log"]
+    assert not score.caught_by_checks["off_by_one"]  # one line up, but this finding hit exactly
