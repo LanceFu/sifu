@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -564,6 +565,44 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
             )
         return {"wait_kind": "decision", "request_id": request_id, "status": "needs_human"}
 
+    def escalate_stuck(state: TicketState) -> TicketState:
+        """Build gave up (or the merge was blocked): ask a person to retry or close.
+
+        The ticket is already needs_human; the node that gave up moved it.
+        """
+        tid = state["ticket_id"]
+        question = (
+            f"Build stopped after {state.get('build_round', 0)} rounds ({state.get('outcome')}); "
+            f"{len(state.get('findings') or [])} findings remain."
+        )
+        if state.get("pr_url"):
+            question += f" Draft pull request: {state['pr_url']}."
+        question += " Answer retry to run Build again (add a note to guide it), or close."
+        with deps.lock:
+            request_id = db.open_human_request(
+                deps.conn, tid, question, ["retry", "retry with a note", "close"]
+            )
+        return {"wait_kind": "stuck", "request_id": request_id, "status": "needs_human"}
+
+    def retry_build(state: TicketState) -> TicketState:
+        """A person asked for Build again: keep the findings, add the note, restart the rounds."""
+        tid = state["ticket_id"]
+        answer = state["answer"].strip()
+        note = re.sub(r"^retry", "", answer, flags=re.IGNORECASE).strip(" :,-\n")
+        deps.log(tid, "build_retried", "human", {"note": note[:500]})
+        findings = list(state.get("findings") or [])
+        if note:
+            findings.append(
+                {"source": "human", "message": note, "file": "", "line": None, "rule": "note"}
+            )
+        return {
+            "findings": findings,
+            "build_round": 0,
+            "fingerprint": "",
+            "outcome": "",
+            "status": "build",
+        }
+
     def await_human(state: TicketState) -> TicketState:
         with deps.lock:
             request = deps.conn.execute(
@@ -584,6 +623,8 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
 
     def after_answer(state: TicketState) -> str:
         answer = state["answer"].strip().lower()
+        if state["wait_kind"] == "stuck":
+            return "close_ticket" if answer.startswith("close") else "retry_build"
         if answer.startswith("close"):
             return "close_ticket"
         if state["wait_kind"] == "decision" and answer.startswith("approve"):
@@ -753,7 +794,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
     def after_verify(state: TicketState) -> str:
         can_publish = deps.github is not None and deps.publisher is not None and state.get("branch")
         if state.get("status") == "needs_human":
-            return "draft_pr" if can_publish else END
+            return "draft_pr" if can_publish else "escalate_stuck"
         if state.get("findings"):
             return "build"
         if critic_on(state):
@@ -864,7 +905,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
     def after_critic(state: TicketState) -> str:
         can_publish = deps.github is not None and deps.publisher is not None and state.get("branch")
         if state.get("status") == "needs_human":
-            return "draft_pr" if can_publish else END
+            return "draft_pr" if can_publish else "escalate_stuck"
         if state.get("findings"):
             return "build"
         return "open_pr" if can_publish else "done"
@@ -897,6 +938,28 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
         verify_event = [e for e in db.list_events(deps.conn, tid) if e["kind"] == "verify_result"]
         verify = json.loads(verify_event[-1]["payload"]) if verify_event else None
+        if state.get("pr_number"):  # a retry after a draft pull request: update that one
+            number = state["pr_number"]
+            try:
+                sha = deps.publisher(
+                    state["worktree"], state["branch"], f"{state['title']} (#{tid})"
+                )
+                deps.github.mark_ready(number)
+                deps.github.comment(
+                    number,
+                    "Sifu: the checks now pass after a retry; this pull request is ready for "
+                    "review.",
+                )
+            except (GitHubError, PublishError) as exc:
+                return fail(tid, "pr_failed", exc)
+            deps.log(
+                tid,
+                "pr_updated",
+                "supervisor",
+                {"number": number, "url": state.get("pr_url"), "sha": sha},
+            )
+            post_critic_notes(state, number)
+            return {"head_sha": sha}
         try:
             sha = deps.publisher(state["worktree"], state["branch"], f"{state['title']} (#{tid})")
             number, url = deps.github.create_pr(
@@ -917,6 +980,27 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         assert deps.github is not None and deps.publisher is not None
         findings = state.get("findings", [])
         reason = state.get("outcome", "")
+        if state.get("pr_number"):  # a retry that gave up again: update the existing draft
+            number = state["pr_number"]
+            try:
+                sha = deps.publisher(
+                    state["worktree"], state["branch"], f"{state['title']} (#{tid})"
+                )
+                deps.github.comment(
+                    number, render_findings(reason, state.get("build_round", 0), findings)
+                )
+            except (GitHubError, PublishError) as exc:
+                deps.log(
+                    tid, "error", "supervisor", {"type": type(exc).__name__, "message": str(exc)}
+                )
+                return {}
+            deps.log(
+                tid,
+                "draft_pr_updated",
+                "supervisor",
+                {"number": number, "url": state.get("pr_url"), "sha": sha},
+            )
+            return {"head_sha": sha}
         try:
             sha = deps.publisher(state["worktree"], state["branch"], f"{state['title']} (#{tid})")
             number, url = deps.github.create_pr(
@@ -1075,6 +1159,8 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         "plan": plan,
         "escalate_questions": escalate_questions,
         "escalate_decision": escalate_decision,
+        "escalate_stuck": escalate_stuck,
+        "retry_build": retry_build,
         "await_human": await_human,
         "approve_decision": approve_decision,
         "revise": revise,
@@ -1104,19 +1190,25 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
     graph.add_conditional_edges("plan", after_plan, ["plan_gate", "escalate_decision"])
     graph.add_edge("escalate_questions", "await_human")
     graph.add_edge("escalate_decision", "await_human")
+    graph.add_edge("escalate_stuck", "await_human")
     graph.add_conditional_edges(
-        "await_human", after_answer, ["close_ticket", "approve_decision", "revise"]
+        "await_human",
+        after_answer,
+        ["close_ticket", "approve_decision", "revise", "retry_build"],
     )
+    graph.add_edge("retry_build", "build")
     graph.add_conditional_edges("revise", after_revise, ["load", END])
     graph.add_edge("close_ticket", END)
     graph.add_conditional_edges("plan_gate", after_gate, ["build", END])
     graph.add_conditional_edges("build", after_build, ["verify", END])
     graph.add_conditional_edges(
-        "verify", after_verify, ["build", "critic", "done", "open_pr", "draft_pr", END]
+        "verify",
+        after_verify,
+        ["build", "critic", "done", "open_pr", "draft_pr", "escalate_stuck", END],
     )
-    graph.add_edge("draft_pr", END)
+    graph.add_edge("draft_pr", "escalate_stuck")
     graph.add_conditional_edges(
-        "critic", after_critic, ["build", "open_pr", "draft_pr", "done", END]
+        "critic", after_critic, ["build", "open_pr", "draft_pr", "escalate_stuck", "done", END]
     )
     graph.add_conditional_edges("open_pr", after_pr, ["merge_decision", END])
     graph.add_conditional_edges(
