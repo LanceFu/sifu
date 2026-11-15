@@ -5,7 +5,18 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from sifu import brainstorm, db, demo, jobs, live, ops, preflight, settings, ui  # noqa: E402
+from sifu import (  # noqa: E402
+    brainstorm,
+    db,
+    demo,
+    jobs,
+    live,
+    ops,
+    preflight,
+    settings,
+    ui,
+    ui_data,
+)
 from sifu.models import (  # noqa: E402
     DecisionResult,
     DecisionType,
@@ -546,3 +557,22 @@ def test_settings_runs_the_setup_checks_on_demand_and_shows_each_result(database
     at.button(key="checks_run").click().run()
     page = text(at)
     assert calls == [1] and "Ollama" in page and "No GitHub token found." in page
+
+
+def test_a_new_database_is_created_and_selected(database, monkeypatch, tmp_path):
+    made = tmp_path / "trial.db"
+
+    def create(name):
+        conn = db.connect(made)
+        db.init_db(conn)
+        conn.close()
+        return made
+
+    monkeypatch.setattr(ops, "create_database", create)
+    monkeypatch.setattr(ui_data, "list_databases", lambda data_dir: [made])
+    at = run("Settings")
+    at.text_input(key="db_name").set_value("trial").run()
+    at.button(key="db_create").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["db"] == made
+    assert "Created trial.db." in [s.value for s in at.success]

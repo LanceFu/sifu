@@ -575,6 +575,17 @@ def show_settings(conn: sqlite3.Connection, db_path: Path) -> None:
     st.button("Use config.yaml values", key="opt-reset", on_click=_reset_options, args=(db_path,))
     st.markdown("**Configuration (read-only)**")
     st.json(cfg.model_dump(), expanded=False)
+    st.markdown("**New database**")
+    name = st.text_input("Name", key="db_name", help="Lowercase letters, digits and hyphens.")
+    if st.button("Create database", key="db_create"):
+        try:
+            path = ops.create_database(name)
+        except (ValueError, FileExistsError) as exc:
+            st.error(str(exc))
+        else:
+            st.session_state["db_pending"] = path
+            st.session_state["notice"] = f"Created {path.name}."
+            st.rerun()
 
 
 def main() -> None:
@@ -590,7 +601,9 @@ def main() -> None:
         st.session_state["view"], st.session_state["ticket"] = goto
     with st.sidebar:
         st.title("Sifu")
-        db_path = st.selectbox("Database", choices, format_func=lambda p: p.name)
+        if (pending := st.session_state.pop("db_pending", None)) is not None:
+            st.session_state["db"] = pending  # a new database is selected on the next run
+        db_path = st.selectbox("Database", choices, format_func=lambda p: p.name, key="db")
         jobs.recover(db_path)  # jobs a dead process left behind are marked interrupted
         conn = open_recorded(db_path)
         projects = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()

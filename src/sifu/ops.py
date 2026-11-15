@@ -5,13 +5,42 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from sifu import db, demo, settings
 from sifu import live as live_wiring
 from sifu.config import Config, load_config
+from sifu.evidence import DATA
 from sifu.graph import Deps, continue_ticket, reopen_ticket, resume_interrupted, run_ticket
 from sifu.llm import LLM
+
+DATABASE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+
+
+def create_database(name: str, *, data_dir: Path | None = None, cfg: Config | None = None) -> Path:
+    """Create ``<data_dir>/<name>.db`` with every table and the TripPlanner project.
+
+    ``ValueError`` for a name that is not lowercase letters, digits and hyphens (at most 40);
+    ``FileExistsError`` when the file exists. Nothing is created or overwritten on an error.
+    """
+    if not DATABASE_NAME.fullmatch(name):
+        raise ValueError(
+            "a database name is lowercase letters, digits and hyphens, 1 to 40 characters, "
+            "starting with a letter or digit"
+        )
+    path = (data_dir or DATA) / f"{name}.db"
+    if path.exists():
+        raise FileExistsError(f"{path.name} already exists")
+    cfg = cfg or load_config(live_wiring.ROOT / "config.yaml")
+    conn = db.connect(path)
+    try:
+        db.init_db(conn)
+        repo = str(Path(cfg.workspace.product_repo_path).expanduser())
+        db.get_or_create_project(conn, "TripPlanner", repo, cfg.github.repo)
+    finally:
+        conn.close()
+    return path
 
 
 def effective_config(db_path: str | Path, cfg: Config | None = None) -> Config:

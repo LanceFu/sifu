@@ -131,3 +131,26 @@ def test_runs_use_the_databases_saved_options(home, cfg):
     deps = ops.open_deps(home, live=False, cfg=cfg, llm=FakeLLM())
     assert deps.cfg.router.merge_mode == "manual" and deps.cfg.planner.enabled is False
     deps.conn.close()
+
+
+def test_create_database_makes_an_initialised_file_with_the_project(tmp_path, cfg):
+    path = ops.create_database("trial-2", data_dir=tmp_path, cfg=cfg)
+    assert path == tmp_path / "trial-2.db"
+    conn = db.connect(path)
+    assert [r["name"] for r in conn.execute("SELECT name FROM projects")] == ["TripPlanner"]
+    assert db.list_jobs(conn) == []  # every table exists
+
+
+@pytest.mark.parametrize("name", ["", "Trial", "a/b", "../x", "a.db", "-a", "a" * 41, "a b"])
+def test_create_database_refuses_a_bad_name(tmp_path, cfg, name):
+    with pytest.raises(ValueError):
+        ops.create_database(name, data_dir=tmp_path, cfg=cfg)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_create_database_never_overwrites(tmp_path, cfg):
+    ops.create_database("trial", data_dir=tmp_path, cfg=cfg)
+    before = (tmp_path / "trial.db").read_bytes()
+    with pytest.raises(FileExistsError):
+        ops.create_database("trial", data_dir=tmp_path, cfg=cfg)
+    assert (tmp_path / "trial.db").read_bytes() == before
