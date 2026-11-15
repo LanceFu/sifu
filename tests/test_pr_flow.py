@@ -126,6 +126,37 @@ def test_approving_while_the_check_is_still_red_blocks_the_merge(conn, make_deps
     final = resume_ticket(deps, ticket, "approve")
     assert final["outcome"] == "merge_blocked" and gh.merges == []
     assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+    assert is_paused(final)
+    [request] = db.open_requests(conn)
+    assert json.loads(request["options"]) == ["retry", "close"]
+
+
+def test_retrying_a_blocked_merge_merges_once_the_check_is_green(conn, make_deps, make_ticket):
+    gh = FakeGitHub(ci=("failure", "failure", "success"))
+    deps, ticket, _ = run(make_deps, make_ticket, gh)
+    resume_ticket(deps, ticket, "approve")  # still red: blocked
+    final = resume_ticket(deps, ticket, "retry")
+    assert final["status"] == "done" and len(gh.merges) == 1
+    assert "merge_retried" in kinds(conn, ticket)
+    assert db.get_ticket(conn, ticket)["status"] == "done"
+
+
+def test_retrying_while_the_check_is_still_red_blocks_again(conn, make_deps, make_ticket):
+    gh = FakeGitHub(ci=("failure",))
+    deps, ticket, _ = run(make_deps, make_ticket, gh)
+    resume_ticket(deps, ticket, "approve")
+    final = resume_ticket(deps, ticket, "retry")
+    assert is_paused(final) and gh.merges == []
+    assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+    assert len(db.open_requests(conn)) == 1
+
+
+def test_closing_a_blocked_merge_fails_the_ticket_without_merging(conn, make_deps, make_ticket):
+    gh = FakeGitHub(ci=("failure",))
+    deps, ticket, _ = run(make_deps, make_ticket, gh)
+    resume_ticket(deps, ticket, "approve")
+    resume_ticket(deps, ticket, "close")
+    assert db.get_ticket(conn, ticket)["status"] == "failed" and gh.merges == []
 
 
 def test_a_human_who_does_not_approve_closes_the_ticket_and_leaves_the_pr(

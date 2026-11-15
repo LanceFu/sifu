@@ -571,18 +571,31 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         The ticket is already needs_human; the node that gave up moved it.
         """
         tid = state["ticket_id"]
-        question = (
-            f"Build stopped after {state.get('build_round', 0)} rounds ({state.get('outcome')}); "
-            f"{len(state.get('findings') or [])} findings remain."
-        )
-        if state.get("pr_url"):
-            question += f" Draft pull request: {state['pr_url']}."
-        question += " Answer retry to run Build again (add a note to guide it), or close."
-        with deps.lock:
-            request_id = db.open_human_request(
-                deps.conn, tid, question, ["retry", "retry with a note", "close"]
+        if state.get("outcome") == "merge_blocked":
+            question = (
+                f"The merge of {state.get('pr_url')} was blocked because the required check is "
+                "not green. Answer retry once the check passes, or close."
             )
+            options = ["retry", "close"]
+        else:
+            question = (
+                f"Build stopped after {state.get('build_round', 0)} rounds "
+                f"({state.get('outcome')}); {len(state.get('findings') or [])} findings remain."
+            )
+            if state.get("pr_url"):
+                question += f" Draft pull request: {state['pr_url']}."
+            question += " Answer retry to run Build again (add a note to guide it), or close."
+            options = ["retry", "retry with a note", "close"]
+        with deps.lock:
+            request_id = db.open_human_request(deps.conn, tid, question, options)
         return {"wait_kind": "stuck", "request_id": request_id, "status": "needs_human"}
+
+    def retry_merge(state: TicketState) -> TicketState:
+        """A person asked for the merge again: the ticket goes back to Test and merge re-checks."""
+        tid = state["ticket_id"]
+        deps.move(tid, TicketStatus.TEST, state.get("facts", {}))
+        deps.log(tid, "merge_retried", "human", {})
+        return {"status": "test", "outcome": ""}
 
     def retry_build(state: TicketState) -> TicketState:
         """A person asked for Build again: keep the findings, add the note, restart the rounds."""
@@ -624,7 +637,9 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
     def after_answer(state: TicketState) -> str:
         answer = state["answer"].strip().lower()
         if state["wait_kind"] == "stuck":
-            return "close_ticket" if answer.startswith("close") else "retry_build"
+            if answer.startswith("close"):
+                return "close_ticket"
+            return "retry_merge" if state.get("outcome") == "merge_blocked" else "retry_build"
         if answer.startswith("close"):
             return "close_ticket"
         if state["wait_kind"] == "decision" and answer.startswith("approve"):
@@ -1145,6 +1160,10 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         deps.log(tid, "pr_merged", "supervisor", {"number": state["pr_number"]})
         return {"facts": facts, "status": "done"}
 
+    def after_merge(state: TicketState) -> str:
+        blocked = state.get("outcome") == "merge_blocked" and state.get("status") == "needs_human"
+        return "escalate_stuck" if blocked else END
+
     def done(state: TicketState) -> TicketState:  # stub
         deps.move(state["ticket_id"], TicketStatus.DONE, state.get("facts"))
         return {"status": "done"}
@@ -1161,6 +1180,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         "escalate_decision": escalate_decision,
         "escalate_stuck": escalate_stuck,
         "retry_build": retry_build,
+        "retry_merge": retry_merge,
         "await_human": await_human,
         "approve_decision": approve_decision,
         "revise": revise,
@@ -1194,9 +1214,10 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
     graph.add_conditional_edges(
         "await_human",
         after_answer,
-        ["close_ticket", "approve_decision", "revise", "retry_build"],
+        ["close_ticket", "approve_decision", "revise", "retry_build", "retry_merge"],
     )
     graph.add_edge("retry_build", "build")
+    graph.add_edge("retry_merge", "merge")
     graph.add_conditional_edges("revise", after_revise, ["load", END])
     graph.add_edge("close_ticket", END)
     graph.add_conditional_edges("plan_gate", after_gate, ["build", END])
@@ -1215,7 +1236,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         "merge_decision", after_merge_decision, ["merge", "escalate_decision"]
     )
     graph.add_conditional_edges("approve_decision", after_approve, ["plan", "plan_gate", "merge"])
-    graph.add_edge("merge", END)
+    graph.add_conditional_edges("merge", after_merge, ["escalate_stuck", END])
     graph.add_edge("done", END)
     return graph.compile(checkpointer=deps.checkpointer)
 
