@@ -140,6 +140,14 @@ finding, or a reviewer that gave no valid answer, sends the ticket to `needs_hum
 otherwise the model drafts `spec.md`. Artifacts go to `workspace.artifacts_dir/<ticket id>/`
 (`intent.md`, `spec.md` or `questions.md`). Every agent output and status change is an `events` row.
 
+`intent.md` and `spec.md` are rendered from `docs/templates/intent.md` and `docs/templates/spec.md`:
+the template is the structure (front matter, headings, table headers, fixed sentences), so editing
+it changes the generated files with no code change. `{{name}}` is replaced by a value the code
+supplies and `{# ... #}` is a comment for editors (each template lists its placeholders). A
+placeholder the code does not supply is an error. Do not name a protected path in the fixed text of
+`spec.md`: the router reads that file, and a mention forces a human decision on every ticket (a test
+guards this). Adding a new field still needs a code change to supply its value.
+
 Each reviewer lives in `src/sifu/prompts/<name>/` as `persona.md`, `rubric.md` and `fewshot.json`.
 Model output is validated with Pydantic, retried with the error, then replaced by a fallback that
 blocks the spec instead of passing it.
