@@ -97,7 +97,7 @@ def show_board(conn: sqlite3.Connection, db_path: Path, project_id: int | None) 
                     if card["waiting"]:
                         st.caption("Waiting for you")
                     st.button(
-                        "Timeline",
+                        "Details",
                         key=f"open-{card['id']}",
                         on_click=_open_timeline,
                         args=(card["id"],),
@@ -428,7 +428,7 @@ def main() -> None:
         if st.session_state.get("view") not in VIEWS:
             st.session_state["view"] = VIEWS[0]
         # on_change="rerun" makes the tabs track state: session_state["view"] holds the open
-        # tab (the board's Timeline button sets it) and .open is true for that tab alone.
+        # tab (the board's Details button sets it) and .open is true for that tab alone.
         if notice := st.session_state.pop("notice", None):
             st.success(notice)
         board, ticket, inbox = st.tabs(VIEWS, key="view", on_change="rerun")
