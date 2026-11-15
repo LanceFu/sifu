@@ -143,3 +143,7 @@ def test_the_job_payload_is_stored_as_given(path, monkeypatch):
         "answer": "Trim it.",
         "live": True,
     }
+
+
+def test_reopen_and_resume_are_job_kinds():
+    assert set(jobs.HANDLERS) == {"run", "answer", "continue", "reopen", "resume"}

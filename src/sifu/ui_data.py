@@ -292,12 +292,25 @@ def inbox(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "actions": [o for o in options if o in COMMANDS],
                 "created_at": r["created_at"],
                 "stage": r["decision_type"],
+                "takes_note": "retry with a note" in options,
                 "rules": json.loads(r["rules_fired"] or "[]"),
                 "needs_live_tools": r["ticket_id"] in past_design
                 or r["decision_type"] in LIVE_DECISIONS,
             }
         )
     return items
+
+
+def can_reopen(conn: sqlite3.Connection, ticket_id: int) -> bool:
+    """True for a failed ticket that never opened a pull request."""
+    ticket = conn.execute("SELECT status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+    if ticket is None or ticket["status"] != TicketStatus.FAILED.value:
+        return False
+    has_pr = conn.execute(
+        "SELECT 1 FROM events WHERE ticket_id = ? AND kind IN ('pr_opened', 'draft_pr_opened')",
+        (ticket_id,),
+    ).fetchone()
+    return has_pr is None
 
 
 def design_request(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:

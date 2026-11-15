@@ -458,3 +458,63 @@ def test_viewing_never_writes_even_with_jobs_and_build_tools(database, monkeypat
     for view in ui.VIEWS:
         run(view)
     assert database.read_bytes() == before
+
+
+def test_a_stuck_build_can_be_retried_with_a_note(database, monkeypatch, no_real_work):
+    conn = db.connect(database)
+    ticket = db.create_ticket(conn, 1, "Remove a Stop")
+    db.append_event(conn, ticket, "implementer_result", "implementer", {"ok": True})
+    db.set_status(conn, ticket, TicketStatus.NEEDS_HUMAN)
+    request = db.open_human_request(
+        conn, ticket, "Build stopped after 3 rounds", ["retry", "retry with a note", "close"]
+    )
+    conn.close()
+    ready(monkeypatch)
+    at = run("Inbox")
+    assert not [w for w in at.text_input if w.key == f"reply-{request}"]  # no generic reply
+    at.text_input(key=f"note-{request}").set_value("use trimmingCharacters").run()
+    next(b for b in at.button if b.key == f"answer-{request}-retry").click().run()
+    assert no_real_work == [
+        (
+            "answer",
+            {"request_id": request, "answer": "retry: use trimmingCharacters", "live": True},
+            ticket,
+        )
+    ]
+
+
+def test_a_failed_ticket_offers_reopen_unless_it_has_a_pull_request(database, no_real_work):
+    conn = db.connect(database)
+    ticket = db.create_ticket(conn, 1, "Remove a Stop")
+    db.set_status(conn, ticket, TicketStatus.FAILED)
+    conn.close()
+    at = open_ticket(ticket)
+    at.button(key="ticket_reopen").click().run()
+    assert no_real_work == [("reopen", {"ticket_id": ticket, "live": False}, ticket)]
+    conn = db.connect(database)
+    db.append_event(conn, ticket, "pr_opened", "supervisor", {"number": 9, "url": PR_URL})
+    conn.close()
+    assert not [b for b in open_ticket(ticket).button if b.key == "ticket_reopen"]
+
+
+def test_an_interrupted_run_offers_resume_in_the_mode_it_was_started_in(database, no_real_work):
+    conn = db.connect(database)
+    job = db.create_job(conn, "run", {"ticket_id": 1, "live": True}, 1)
+    db.start_job(conn, job)
+    db.interrupt_stale_jobs(conn)
+    conn.close()
+    at = open_ticket(1)
+    assert "The last run was cut off when the app stopped." in [w.value for w in at.warning]
+    assert at.button(key="ticket_resume").disabled  # tools are missing in this test
+    assert "Resume needs: No GitHub token found." in text(at)
+
+
+def test_resume_is_submitted_when_the_tools_are_there(database, monkeypatch, no_real_work):
+    conn = db.connect(database)
+    job = db.create_job(conn, "run", {"ticket_id": 1, "live": True}, 1)
+    db.start_job(conn, job)
+    db.interrupt_stale_jobs(conn)
+    conn.close()
+    ready(monkeypatch)
+    open_ticket(1).button(key="ticket_resume").click().run()
+    assert no_real_work == [("resume", {"ticket_id": 1, "live": True}, 1)]

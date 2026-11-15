@@ -23,6 +23,8 @@ HANDLERS: dict[str, Callable[..., str]] = {
     "run": ops.run,
     "answer": ops.answer,
     "continue": ops.continue_to_build,
+    "reopen": ops.reopen,
+    "resume": ops.resume,
 }
 
 
