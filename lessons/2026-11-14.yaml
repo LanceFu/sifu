@@ -1,0 +1,14 @@
+# Lessons proposed for tripplanner-ios conventions.md, each from a failure seen in a real run.
+# Evidence is a block scalar (>-), so a "#" in it is text, not a comment.
+- lesson: >-
+    No force casts (`as!`); use `as?` with a guard that throws a case of the typed Error enum.
+  evidence: >-
+    PR #4 (Sifu ticket 1): SwiftLint force_cast at Sources/TripPlannerCore/DayPlan.swift:39 was
+    still unresolved after 3 build rounds, so the loop stopped at its cap and opened a draft PR.
+    The violation was planted to test the loop, but the implementer never removed it.
+- lesson: >-
+    Change only the files the spec lists, plus tests under Tests/; ask before touching anything
+    else.
+  evidence: >-
+    PR #3 (Sifu ticket 1) took three verify rounds because the implementer changed a file outside
+    the spec, which the diff check flagged before the planted SwiftLint violation.

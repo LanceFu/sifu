@@ -1,0 +1,20 @@
+# REQ-8: plain-text Itinerary export. Four seeded flaws.
+base: ebe6b67
+notes: "REQ-8: plain-text Itinerary export. Four seeded flaws."
+expected:
+  - id: timestamp_in_text
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["exported \\(Date())"]
+    critic: contract
+  - id: force_unwrap_empty_trip
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["days.first!"]
+    critic: edge_cases
+  - id: day_numbering
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["\"Day \\(index)\""]
+    critic: contract
+  - id: extra_from_line
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["From \\(firstDate)"]
+    critic: contract

@@ -1,0 +1,50 @@
+flowchart TD
+  S([Ticket]) --> load
+  subgraph DESIGN["Design stage (built)"]
+    load --> checks["checks<br/>(rules: glossary, format,<br/>injection, protected paths)"]
+    load --> ra["review_ambiguity<br/>(LLM)"]
+    load --> rs["review_scope<br/>(LLM)"]
+    load --> rp["review_policy<br/>(LLM)"]
+    checks --> synth["synthesize<br/>(merge findings, draft spec)"]
+    ra --> synth
+    rs --> synth
+    rp --> synth
+  end
+  synth -->|blocking questions| eq[escalate_questions]
+  synth -->|spec ready| route["route<br/>(risk floor rules +<br/>two assessors, can only raise)"]
+  route -->|auto / auto with veto| accept
+  route -->|human tier| ed[escalate_decision]
+  eq --> ah{{"await_human<br/>(pause, checkpointed)"}}
+  ed --> ah
+  ah -->|approve| ad[approve_decision]
+  ah -->|close| cl[close_ticket]
+  ah -->|feedback| rev[revise]
+  rev -->|round under cap of 3| load
+  rev -->|cap reached| E([End: needs human])
+  cl --> E2([End: closed])
+  accept --> gate
+  ad --> gate
+  gate["plan_gate<br/>(gate facts allow build?)"] -->|yes| build["build<br/>(Claude Code in worktree,<br/>local model optional)"]
+  gate -->|no| E3([End])
+  build -->|protected path or<br/>file outside spec| H1([Needs human])
+  build -->|run failed| E4([End: failed])
+  build -->|ok| verify
+  subgraph REVIEW["Review stage (planned)"]
+    verify["verify<br/>swift build, SwiftLint, swift test<br/>(code decides)"]
+    critic["critic<br/>edge cases, contract, security<br/>(LLM, fresh context, other model family)"]
+    verify -->|clean| critic
+  end
+  verify -->|findings, under iteration cap<br/>and still progressing| build
+  verify -->|cap reached or no progress| H2([Needs human])
+  critic -->|blockers| build
+  critic -->|no blockers| openpr["open_pr<br/>(findings as PR comments)"]
+  openpr --> merge["merge_decision<br/>(router: manual / risk_based / auto)"]
+  merge --> done([Done])
+  classDef human fill:#fde7c8,stroke:#c77700
+  classDef llm fill:#e0e7ff,stroke:#4f46e5
+  classDef code fill:#e5f4e4,stroke:#2e7d32
+  classDef planned stroke-dasharray: 6 4,stroke-width:2px
+  class ah,eq,ed,ad,cl,rev,H1,H2 human
+  class ra,rs,rp,critic llm
+  class checks,synth,route,accept,gate,verify,openpr,merge code
+  class verify,critic,openpr,merge planned

@@ -1,0 +1,19 @@
+diff --git a/Sources/TripPlannerCore/DayPlan.swift b/Sources/TripPlannerCore/DayPlan.swift
+index 7571dda..db51206 100644
+--- a/Sources/TripPlannerCore/DayPlan.swift
++++ b/Sources/TripPlannerCore/DayPlan.swift
+@@ -17,6 +17,14 @@ public struct DayPlan: Identifiable, Equatable, Sendable {
+         stops.reduce(0) { $0 + $1.durationMinutes }
+     }
+ 
++    /// Total Duration, in minutes, above which the app warns the Traveller (REQ-7).
++    private static let warningThresholdMinutes = 960
++
++    /// True when the total Duration exceeds 16 hours. This only warns; adding Stops is never blocked.
++    public var exceedsRecommendedDuration: Bool {
++        totalDurationMinutes > DayPlan.warningThresholdMinutes
++    }
++
+     /// Appends a Stop to the end of the Day Plan.
+     public mutating func add(_ stop: Stop) {
+         stops.append(stop)

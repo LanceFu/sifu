@@ -1,0 +1,24 @@
+[
+  {
+    "change": "### Sources/Itinerary.swift\n   8 +| func headline(for names: [String]) -> String {\n   9 +|     let first = names[0]\n  10 +|     return names.count > 1 ? \"\\(first) and \\(names.count - 1) more\" : first\n  11 +| }",
+    "output": {
+      "findings": [
+        {
+          "severity": "blocker",
+          "category": "empty_collection",
+          "file": "Sources/Itinerary.swift",
+          "line": 9,
+          "quote": "names[0]",
+          "message": "The first element is read without checking that the list has one.",
+          "scenario": "A Traveller opens an Itinerary that has no names yet, so headline is called with an empty array and names[0] traps, crashing the app."
+        }
+      ]
+    }
+  },
+  {
+    "change": "### Sources/Itinerary.swift\n   8 +| func headline(for names: [String]) -> String {\n   9 +|     guard let first = names.first else { return \"Empty\" }\n  10 +|     return names.count > 1 ? \"\\(first) and \\(names.count - 1) more\" : first\n  11 +| }",
+    "output": {
+      "findings": []
+    }
+  }
+]

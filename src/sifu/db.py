@@ -94,7 +94,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     """Open a connection with foreign keys on, creating the parent directory if needed."""
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -109,6 +109,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 def create_project(
     conn: sqlite3.Connection, name: str, repo_path: str, github_repo: str | None = None
 ) -> int:
+    """Insert a project and return its id."""
     with conn:
         cur = conn.execute(
             "INSERT INTO projects (name, repo_path, github_repo) VALUES (?, ?, ?)",
@@ -117,7 +118,18 @@ def create_project(
     return int(cur.lastrowid)
 
 
+def get_or_create_project(
+    conn: sqlite3.Connection, name: str, repo_path: str, github_repo: str | None = None
+) -> int:
+    """Return the id of the project with this name, creating it if needed."""
+    row = conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()
+    if row:
+        return int(row["id"])
+    return create_project(conn, name, repo_path, github_repo)
+
+
 def create_ticket(conn: sqlite3.Connection, project_id: int, title: str, body: str = "") -> int:
+    """Insert a ticket, log its ticket_created event and return its id."""
     with conn:
         cur = conn.execute(
             "INSERT INTO tickets (project_id, title, body) VALUES (?, ?, ?)",
@@ -128,7 +140,18 @@ def create_ticket(conn: sqlite3.Connection, project_id: int, title: str, body: s
     return ticket_id
 
 
+def append_to_ticket_body(conn: sqlite3.Connection, ticket_id: int, text: str) -> None:
+    """Add a clarification to the end of a ticket's body (a human's answer to a question)."""
+    with conn:
+        conn.execute(
+            "UPDATE tickets SET body = body || ?, updated_at = datetime('now') WHERE id = ?",
+            (f"\n\n{text}", ticket_id),
+        )
+    append_event(conn, ticket_id, "ticket_clarified", "human", {"text": text[:500]})
+
+
 def get_ticket(conn: sqlite3.Connection, ticket_id: int) -> sqlite3.Row:
+    """Return one ticket row; raise KeyError when the id is unknown."""
     row = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
     if row is None:
         raise KeyError(f"ticket {ticket_id} not found")
@@ -142,6 +165,7 @@ def append_event(
     actor: str,
     payload: Mapping[str, Any] | None = None,
 ) -> int:
+    """Append one row to the events log and return its id."""
     with conn:
         cur = conn.execute(
             "INSERT INTO events (ticket_id, kind, actor, payload) VALUES (?, ?, ?, ?)",
@@ -151,6 +175,7 @@ def append_event(
 
 
 def list_events(conn: sqlite3.Connection, ticket_id: int) -> list[sqlite3.Row]:
+    """All events for a ticket, oldest first."""
     return conn.execute(
         "SELECT * FROM events WHERE ticket_id = ? ORDER BY id", (ticket_id,)
     ).fetchall()
@@ -228,6 +253,7 @@ def open_human_request(
     options: list[str] | None = None,
     decision_id: int | None = None,
 ) -> int:
+    """Open a request for a human answer, log it and return its id."""
     with conn:
         cur = conn.execute(
             "INSERT INTO human_requests (ticket_id, decision_id, question, options)"
@@ -240,6 +266,7 @@ def open_human_request(
 
 
 def answer_human_request(conn: sqlite3.Connection, request_id: int, answer: str) -> None:
+    """Record a human's answer; raise if the request is unknown or already answered."""
     row = conn.execute("SELECT * FROM human_requests WHERE id = ?", (request_id,)).fetchone()
     if row is None:
         raise KeyError(f"human request {request_id} not found")
@@ -257,6 +284,7 @@ def answer_human_request(conn: sqlite3.Connection, request_id: int, answer: str)
 
 
 def open_requests(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every human request still waiting for an answer, oldest first."""
     return conn.execute("SELECT * FROM human_requests WHERE status = 'open' ORDER BY id").fetchall()
 
 
@@ -270,6 +298,7 @@ def record_run(
     latency_ms: int | None = None,
     ok: bool = True,
 ) -> int:
+    """Record one model call (agent, model, tokens, latency) and return its id."""
     with conn:
         cur = conn.execute(
             "INSERT INTO runs (ticket_id, agent, model, prompt_tokens, completion_tokens,"

@@ -1,0 +1,101 @@
+"""Deterministic glossary checker. No model is involved, so the result is repeatable."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, Field
+
+from sifu.models import Finding
+
+
+class GlossaryTerm(BaseModel):
+    """One product term, its definition and the words to avoid in its place."""
+
+    term: str
+    definition: str
+    avoid: list[str] = Field(default_factory=list)
+
+
+class Glossary(BaseModel):
+    """The product's terms and what is out of scope for version 1."""
+
+    terms: list[GlossaryTerm] = Field(default_factory=list)
+    out_of_scope: list[str] = Field(default_factory=list)
+
+
+def load_glossary(path: str | Path) -> Glossary:
+    """Read a product glossary YAML file."""
+    with open(path, encoding="utf-8") as handle:
+        return Glossary.model_validate(yaml.safe_load(handle) or {})
+
+
+def _pattern(word: str, *, inflect: bool) -> re.Pattern[str]:
+    suffix = r"(?:s|es)?" if inflect else ""
+    return re.compile(rf"\b{re.escape(word)}{suffix}\b", re.IGNORECASE)
+
+
+def check_text(glossary: Glossary, text: str) -> list[Finding]:
+    """Flag avoided words (minor) and out-of-scope features (major) found in the text."""
+    findings: list[Finding] = []
+    for term in glossary.terms:
+        for word in term.avoid:
+            match = _pattern(word, inflect=True).search(text)
+            if match:
+                findings.append(
+                    Finding(
+                        reviewer="glossary",
+                        category="glossary_violation",
+                        severity="minor",
+                        message=f"Use '{term.term}' instead of '{match.group(0)}'.",
+                        evidence=_snippet(text, match),
+                    )
+                )
+    for word in glossary.out_of_scope:
+        match = _pattern(word, inflect=True).search(text)
+        if match:
+            findings.append(
+                Finding(
+                    reviewer="glossary",
+                    category="out_of_scope",
+                    severity="major",
+                    message=f"'{word}' is out of scope for version 1.",
+                    evidence=_snippet(text, match),
+                )
+            )
+    return findings
+
+
+# Spans the rewrite never touches: code in backticks, and tokens that look like paths or file names
+_KEEP = re.compile(r"(`[^`]*`|[\w.-]*/[\w./-]*|\b[\w-]+\.[A-Za-z]\w*\b)")
+
+
+def normalize_text(glossary: Glossary, text: str) -> str:
+    """Replace each avoided word with its glossary term, so reviewers read the product's words.
+
+    Each avoided word names exactly one term, so the rewrite needs no judgement. A plural keeps its
+    plural. Text in backticks and tokens that look like paths or file names are left as written,
+    so a ticket's file references still point at real files. Out-of-scope words
+    are not touched: they are a finding, not a synonym.
+    """
+    pairs = sorted(
+        ((word, term.term) for term in glossary.terms for word in term.avoid),
+        key=lambda pair: -len(pair[0]),  # "point of interest" before "point"
+    )
+
+    def rewrite(prose: str) -> str:
+        for word, term in pairs:
+            prose = _pattern(word, inflect=True).sub(
+                lambda m, w=word, t=term: t + ("s" if len(m.group(0)) > len(w) else ""), prose
+            )
+        return prose
+
+    parts = _KEEP.split(text)  # odd indexes are the kept spans
+    return "".join(p if i % 2 else rewrite(p) for i, p in enumerate(parts))
+
+
+def _snippet(text: str, match: re.Match[str], radius: int = 40) -> str:
+    start, end = max(0, match.start() - radius), min(len(text), match.end() + radius)
+    return " ".join(text[start:end].split())

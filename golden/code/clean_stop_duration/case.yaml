@@ -1,0 +1,4 @@
+# REQ-4 implemented correctly. Any kept finding is a false positive.
+base: ebe6b67
+notes: Clean twin of demo2_stop_duration.
+expected: []

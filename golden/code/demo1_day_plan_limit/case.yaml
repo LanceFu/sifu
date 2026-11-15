@@ -1,0 +1,16 @@
+# REQ-3: a Day Plan holds at most 10 Stops. Three seeded flaws.
+base: ebe6b67            # tripplanner-ios commit the patch applies to
+notes: First demo diff. An earlier version of the prompts produced a false "does not append" blocker.
+expected:
+  - id: off_by_one
+    file: Sources/TripPlannerCore/DayPlan.swift
+    quotes: ["stops.count > 10"]
+    critic: edge_cases
+  - id: coordinates_in_log
+    file: Sources/TripPlannerCore/DayPlan.swift
+    quotes: ["print(\"Adding"]
+    critic: security
+  - id: extra_api
+    file: Sources/TripPlannerCore/DayPlan.swift
+    quotes: ["func removeAll"]
+    critic: contract

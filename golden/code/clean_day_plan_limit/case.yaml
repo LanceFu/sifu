@@ -1,0 +1,4 @@
+# REQ-3 implemented correctly. Any kept finding is a false positive.
+base: ebe6b67
+notes: Clean twin of demo1_day_plan_limit.
+expected: []

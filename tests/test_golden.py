@@ -1,0 +1,182 @@
+"""The golden-set loader and scorer, and the critic pass on a real git tree with a fake model."""
+
+import json
+import subprocess
+
+import pytest
+
+from sifu.critic import review_worktree
+from sifu.golden import GOLDEN_DIR, is_heldout, load_cases, score_case, summarize
+from sifu.verify import added_lines
+from tests.fakes import FakeLLM
+
+FILE = "Sources/TripPlannerCore/DayPlan.swift"
+INDEX = {FILE: {22: "        if stops.count > 10 {", 25: '        print("Adding \\(x)")'}}
+
+
+def finding(line, severity="blocker", critic="edge_cases"):
+    return {"file": FILE, "line": line, "severity": severity, "critic": critic, "message": "m"}
+
+
+def case(name):
+    return next(c for c in load_cases(only=[name]))
+
+
+def test_the_shipped_cases_load_and_their_patches_exist():
+    cases = load_cases()
+    assert {c.name for c in cases} >= {"demo1_day_plan_limit", "clean_stop_duration"}
+    for c in cases:
+        assert c.spec_path.is_file() and c.patch_path.is_file() and c.base
+    clean = [c for c in cases if c.name.startswith("clean_")]
+    assert len(clean) >= 2 and all(c.clean for c in clean)
+    assert all(not c.clean for c in cases if not c.name.startswith("clean_"))
+    assert GOLDEN_DIR.is_dir()
+
+
+def test_a_flaw_is_detected_by_a_finding_on_a_line_holding_its_quote():
+    score = score_case(
+        case("demo1_day_plan_limit"), [finding(22), finding(25, "major", "security")], INDEX
+    )
+    assert score.detected == {"off_by_one": True, "coordinates_in_log": True, "extra_api": False}
+    assert score.by_expected_critic["off_by_one"] and score.by_expected_critic["coordinates_in_log"]
+    assert score.false_positives == []
+
+
+def test_a_finding_that_cites_a_line_next_to_the_quote_still_detects_the_flaw():
+    # models often cite the signature or body line beside the one the label quotes
+    near = score_case(case("demo1_day_plan_limit"), [finding(20)], INDEX)
+    assert near.detected["off_by_one"] and near.false_positives == []
+    assert near.detected_exact == {k: False for k in near.detected}  # only the window found it
+    assert summarize([near])["detected_exact"] == 0 and summarize([near])["detected"] == 1
+    far = score_case(case("demo1_day_plan_limit"), [finding(28)], INDEX)
+    assert not any(far.detected.values()) and len(far.false_positives) == 1
+    # a finding exactly on one flaw's quote does not also claim a flaw two lines away
+    exact = score_case(case("demo1_day_plan_limit"), [finding(25, "major", "security")], INDEX)
+    assert exact.detected["coordinates_in_log"] and not exact.detected["off_by_one"]
+
+
+def test_a_finding_that_matches_no_flaw_is_a_false_positive_and_blockers_are_counted():
+    index = {FILE: {**INDEX[FILE], 40: "let a = 1"}}
+    score = score_case(
+        case("demo1_day_plan_limit"), [finding(22), finding(40), finding(40, "major")], index
+    )
+    assert len(score.false_positives) == 2 and score.blocker_false_positives == 1
+
+
+def test_found_by_a_different_critic_is_noted_and_merged_critics_count():
+    merged = finding(22, critic="contract+security")
+    score = score_case(case("demo1_day_plan_limit"), [merged], INDEX)
+    assert score.detected["off_by_one"] and not score.by_expected_critic["off_by_one"]
+    merged = finding(22, critic="contract+edge_cases")
+    assert score_case(case("demo1_day_plan_limit"), [merged], INDEX).by_expected_critic[
+        "off_by_one"
+    ]
+
+
+def test_any_finding_on_a_clean_case_is_a_false_positive_and_the_summary_adds_up():
+    clean = score_case(case("clean_day_plan_limit"), [finding(22)], INDEX)
+    seeded = score_case(case("demo1_day_plan_limit"), [finding(22)], INDEX)
+    total = summarize([clean, seeded])
+    assert total["flaws"] == 3 and total["detected"] == 1 and total["detection_rate"] == 0.333
+    assert total["detected_exact"] == 1 and total["detection_rate_exact"] == 0.333
+    assert total["false_positives"] == 1 and total["clean_cases_with_findings"] == 1
+    assert total["clean_first_pass_rate"] == 0.0  # the one clean case got a blocker
+
+
+@pytest.mark.parametrize("name", ["demo1_day_plan_limit", "demo2_stop_duration"])
+def test_every_seeded_flaw_quote_is_in_its_patch(name):
+    c = case(name)
+    patch = c.patch_path.read_text(encoding="utf-8")
+    for flaw in c.expected:
+        assert any(q in patch for q in flaw.quotes), flaw.id
+
+
+def test_the_review_pipeline_runs_on_a_patched_tree(tmp_path):
+    from sifu.config import CriticConfig
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "A.swift").write_text("one\ntwo\n")
+    git("add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
+    (tmp_path / "A.swift").write_text("one\nif count > 10 {\nthree\n")
+    reply = json.dumps(
+        {
+            "findings": [
+                {
+                    "severity": "blocker",
+                    "category": "off_by_one",
+                    "file": "A.swift",
+                    "line": 1,  # one line off: the quote is on line 2
+                    "quote": "count > 10",
+                    "message": "off by one",
+                    "scenario": "With 10 items the check still lets an eleventh one in.",
+                }
+            ]
+        }
+    )
+    result = review_worktree(
+        tmp_path,
+        "spec",
+        llm=FakeLLM({"Edge Case Critic": reply}),
+        critic_cfg=CriticConfig(),
+        critic_model="m",
+        checker_model="c",
+        added=added_lines(tmp_path),
+    )
+    assert [(f["file"], f["line"], f["severity"]) for f in result.merged] == [
+        ("A.swift", 2, "blocker")
+    ]
+    assert result.degraded == [] and result.index["A.swift"][2] == "if count > 10 {"
+
+
+def test_every_seeded_flaw_quote_of_every_case_is_in_its_patch():
+    for c in load_cases():
+        patch = c.patch_path.read_text(encoding="utf-8")
+        for flaw in c.expected:
+            assert any(q in patch for q in flaw.quotes), f"{c.name}: {flaw.id}"
+
+
+def test_held_out_cases_exist_in_both_kinds_and_are_kept_apart():
+    held = [c for c in load_cases() if is_heldout(c.name)]
+    assert sum(c.clean for c in held) >= 2 and sum(not c.clean for c in held) >= 2
+    assert not any(is_heldout(c.name) for c in load_cases(only=["demo1_day_plan_limit"]))
+
+
+def test_a_verify_finding_on_a_flaw_line_counts_as_caught_by_the_checks():
+    from sifu.golden import score_checks
+
+    c = case("demo1_day_plan_limit")
+    score = score_case(c, [finding(22), finding(25, "major", "security")], INDEX)
+    unmapped = {"source": "test", "file": "Tests/X.swift", "line": 3, "message": "failed"}
+    score_checks(score, c, [{"source": "swiftlint", "file": FILE, "line": 25}, unmapped], INDEX)
+    assert score.caught_by_checks == {
+        "off_by_one": False,
+        "coordinates_in_log": True,
+        "extra_api": False,
+    }
+    assert score.checks_ok is False and score.unmapped_check_findings == [unmapped]
+    total = summarize([score])
+    assert total["caught_by_checks"] == 1
+    assert total["found_beyond_checks"] == 1  # off_by_one: a critic found it, the checks did not
+    assert total["cases_failing_checks"] == 1
+
+
+def test_cases_without_a_verify_run_leave_the_check_fields_empty():
+    score = score_case(case("demo1_day_plan_limit"), [finding(22)], INDEX)
+    total = summarize([score])
+    assert score.checks_ok is None and total["caught_by_checks"] is None
+    assert total["found_beyond_checks"] is None
+
+
+def test_one_check_finding_on_a_flaw_line_does_not_also_claim_neighbouring_flaws():
+    from sifu.golden import score_checks
+
+    c = case("demo1_day_plan_limit")
+    dense = {FILE: {22: INDEX[FILE][22], 23: INDEX[FILE][25]}}  # two flaws on adjacent lines
+    score = score_case(c, [], dense)
+    score_checks(score, c, [{"source": "swiftlint", "file": FILE, "line": 23}], dense)
+    assert score.caught_by_checks["coordinates_in_log"]
+    assert not score.caught_by_checks["off_by_one"]  # one line up, but this finding hit exactly

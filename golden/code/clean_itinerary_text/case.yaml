@@ -1,0 +1,4 @@
+# REQ-8 implemented correctly. Any kept finding is a false positive.
+base: ebe6b67
+notes: "Clean twin of req8_itinerary_text."
+expected: []

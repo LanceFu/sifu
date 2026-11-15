@@ -1,0 +1,21 @@
+diff --git a/Sources/TripPlannerCore/Trip.swift b/Sources/TripPlannerCore/Trip.swift
+index 8109dba..a83a5ac 100644
+--- a/Sources/TripPlannerCore/Trip.swift
++++ b/Sources/TripPlannerCore/Trip.swift
+@@ -51,6 +51,16 @@ public struct Trip: Identifiable, Equatable, Sendable {
+         days.reduce(0) { $0 + $1.totalDurationMinutes }
+     }
+ 
++    /// A copy of this Trip under a new name. The Trip, its Day Plans and its Stops all get new ids.
++    public func duplicated(named newName: String) throws -> Trip {
++        var copy = try Trip(name: newName, startDate: startDate, endDate: endDate)
++        for day in days {
++            let stops = day.stops.map { Stop(place: $0.place, durationMinutes: $0.durationMinutes) }
++            try copy.addDay(DayPlan(date: day.date, stops: stops))
++        }
++        return copy
++    }
++
+     private static func dayStart(_ date: Date) -> Date {
+         calendar.startOfDay(for: date)
+     }

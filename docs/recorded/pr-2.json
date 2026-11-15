@@ -1,0 +1,51 @@
+{
+  "source": "GitHub, read once with `gh pr view 2 --json ...`; data/live.db, the database of this run, was lost",
+  "captured_at": "2026-11-14",
+  "number": 2,
+  "title": "Reject blank Trip names (Sifu ticket 1)",
+  "url": "https://github.com/LanceFu/tripplanner-ios/pull/2",
+  "state": "MERGED",
+  "created_at": "2026-11-06T23:04:35Z",
+  "merged_at": "2026-11-06T23:07:51Z",
+  "merged_by": "LanceFu",
+  "head_branch": "sifu/ticket-1",
+  "head_sha": "9abc542e0a0804c4b9a84b28c11851240a9e829e",
+  "merge_commit": "ebe6b67ba7652f310eab2ba5c79798d7d7b69d9e",
+  "files": [
+    {
+      "path": "Sources/TripPlannerCore/Trip.swift",
+      "additions": 3,
+      "deletions": 2
+    },
+    {
+      "path": "Tests/TripPlannerCoreTests/TripTests.swift",
+      "additions": 13,
+      "deletions": 3
+    }
+  ],
+  "commits": [
+    {
+      "sha": "9abc542e0a0804c4b9a84b28c11851240a9e829e",
+      "message": "Reject blank Trip names (#1)",
+      "author": "Sifu",
+      "committed_at": "2026-11-06T23:04:32Z"
+    }
+  ],
+  "checks": [
+    {
+      "name": "test",
+      "conclusion": "SUCCESS",
+      "started_at": "2026-11-06T23:04:43Z",
+      "completed_at": "2026-11-06T23:05:46Z",
+      "url": "https://github.com/LanceFu/tripplanner-ios/actions/runs/42309362933/job/128206689096"
+    }
+  ],
+  "comments": [
+    {
+      "author": "LanceFu",
+      "created_at": "2026-11-06T23:06:48Z",
+      "url": "https://github.com/LanceFu/tripplanner-ios/pull/2#issuecomment-6698018825",
+      "body": "Sifu merge decision: tier human. Rules fired: merge_mode_manual. Required check: passed.\n\n- qwen3.8:27b: The change is small, additive, and well-specified (whitespace-only name rejection refining REQ-1), touching only two files with passing tests, but REQ-1 is marked Implemented so the rubric raises the tier by one, warranting a human veto opportunity.\n- gemma4:31b-mlx: The change is a small validation, but it touches REQ-1 which is already marked as Implemented, which according to the tier definitions and risk rubric raises the tier to 1."
+    }
+  ]
+}

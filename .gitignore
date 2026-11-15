@@ -10,3 +10,4 @@ __pycache__/
 data/*.db
 data/*.db-*
 worktrees/
+data/artifacts/

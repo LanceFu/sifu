@@ -8,7 +8,8 @@ from sifu.config import ImplementerConfig, load_config
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_shipped_config_is_valid():
+def test_shipped_config_is_valid(monkeypatch):
+    monkeypatch.delenv("SIFU_IMPLEMENTER_BACKEND", raising=False)
     cfg = load_config(ROOT / "config.yaml")
     assert cfg.implementer.backend == "cloud"
     assert len(cfg.models.risk_assessors) >= 2
@@ -17,5 +18,43 @@ def test_shipped_config_is_valid():
 
 def test_ollama_backend_requires_a_model():
     with pytest.raises(ValidationError):
-        ImplementerConfig(backend="ollama")
-    assert ImplementerConfig(backend="ollama", model="qwen3-coder:30b").model == "qwen3-coder:30b"
+        ImplementerConfig(backend="ollama", ollama_model="")
+
+
+def test_each_backend_keeps_its_own_model():
+    cloud = ImplementerConfig(cloud_model="claude-sonnet-4-5")
+    assert cloud.model == "claude-sonnet-4-5"
+    local = cloud.using("ollama")
+    assert local.backend == "ollama" and local.model == "qwen3-coder:30b"
+    assert cloud.backend == "cloud"  # using() returns a copy
+
+
+def test_env_var_switches_the_backend_for_one_run(monkeypatch):
+    monkeypatch.setenv("SIFU_IMPLEMENTER_BACKEND", "ollama")
+    cfg = load_config(ROOT / "config.yaml")
+    # the local model is whatever config.yaml names, so a model swap does not break this test
+    assert cfg.implementer.backend == "ollama"
+    assert cfg.implementer.model == cfg.implementer.ollama_model != cfg.implementer.cloud_model
+    monkeypatch.setenv("SIFU_IMPLEMENTER_BACKEND", "lmstudio")
+    with pytest.raises(ValueError):
+        load_config(ROOT / "config.yaml")
+
+
+def test_readme_lists_every_config_option():
+    from pathlib import Path
+
+    from pydantic import BaseModel
+
+    from sifu.config import Config
+
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    missing = []
+    for section, field in Config.model_fields.items():
+        model = field.annotation
+        assert isinstance(model, type) and issubclass(model, BaseModel)
+        missing += [
+            f"{section}.{name}"
+            for name in model.model_fields
+            if f"`{section}.{name}`" not in readme
+        ]
+    assert missing == []

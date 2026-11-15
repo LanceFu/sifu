@@ -1,0 +1,16 @@
+# REQ-6: duplicate a Trip. Three seeded flaws.
+base: ebe6b67
+notes: "REQ-6: duplicate a Trip. Three seeded flaws."
+expected:
+  - id: same_ids
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["Trip(id: id, name: newName"]
+    critic: contract
+  - id: drops_last_day
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["days.dropLast()"]
+    critic: edge_cases
+  - id: try_bang
+    file: Sources/TripPlannerCore/Trip.swift
+    quotes: ["try! copy.addDay"]
+    critic: edge_cases

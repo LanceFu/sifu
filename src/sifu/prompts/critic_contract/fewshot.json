@@ -1,0 +1,24 @@
+[
+  {
+    "change": "### Sources/Export.swift\n  14 +| public func itineraryText(for stops: [Stop]) -> String {\n  15 +|     stops.sorted { $0.place.name < $1.place.name }\n  16 +|         .map { $0.place.name }\n  17 +|         .joined(separator: \"\\n\")\n  18 +| }",
+    "output": {
+      "findings": [
+        {
+          "severity": "blocker",
+          "category": "criterion_not_met",
+          "file": "Sources/Export.swift",
+          "line": 15,
+          "quote": "sorted { $0.place.name < $1.place.name }",
+          "message": "The criterion says the Itinerary lists Stops in the order they were planned, but the code sorts them by name.",
+          "scenario": "A Day Plan has Stops Museum then Bakery; the exported text lists Bakery first, so the Itinerary no longer matches the planned order."
+        }
+      ]
+    }
+  },
+  {
+    "change": "### Sources/Export.swift\n  15 +|     stops.map { $0.place.name }\n  16 +|         .joined(separator: \"\\n\")",
+    "output": {
+      "findings": []
+    }
+  }
+]

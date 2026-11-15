@@ -1,0 +1,23 @@
+diff --git a/Sources/TripPlannerCore/DayPlan.swift b/Sources/TripPlannerCore/DayPlan.swift
+index 7571dda..1b69972 100644
+--- a/Sources/TripPlannerCore/DayPlan.swift
++++ b/Sources/TripPlannerCore/DayPlan.swift
+@@ -21,4 +21,18 @@ public struct DayPlan: Identifiable, Equatable, Sendable {
+     public mutating func add(_ stop: Stop) {
+         stops.append(stop)
+     }
++
++    /// Removes and returns the Stop with the given id. Throws `stopNotFound` if there is none.
++    @discardableResult
++    public mutating func remove(stopID: UUID) throws -> Stop {
++        guard let index = stops.firstIndex(where: { $0.id == stopID }) else {
++            throw DayPlanError.stopNotFound
++        }
++        return stops.remove(at: index)
++    }
++}
++
++/// Errors raised when a Day Plan changes.
++public enum DayPlanError: Error, Equatable {
++    case stopNotFound
+ }
