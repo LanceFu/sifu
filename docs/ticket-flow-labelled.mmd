@@ -24,8 +24,8 @@ flowchart TD
   ah -->|approve| ad[approve_decision]
   ah -->|close| cl[close_ticket]
   ah -->|feedback| rev[revise]
-  ah -->|retry: stuck build| rb["retry_build<br/>(optional note becomes a finding)"]
-  ah -->|retry: blocked merge| rm[retry_merge]
+  ah -->|"retry: stuck build"| rb["retry_build<br/>(optional note becomes a finding)"]
+  ah -->|"retry: blocked merge"| rm[retry_merge]
   ad -->|spec, planner on| plan
   ad -->|spec or plan| gate
   ad -->|merge| merge
@@ -44,10 +44,14 @@ flowchart TD
   end
   verify -->|findings, under cap<br/>and still progressing| build
   verify -->|clean, critic off| openpr
-  verify -->|cap reached or no progress| draft["draft_pr<br/>(draft PR with the findings;<br/>without GitHub, skipped)"]
+  verify -->|cap reached or no progress| draft["draft_pr<br/>(draft PR with the findings)"]
   critic -->|blockers| build
   critic -->|no blockers| openpr["open_pr<br/>(findings as PR comments;<br/>a retry updates the same PR)"]
   critic -->|cap reached or no progress| draft
+  verify -.->|cap or no progress,<br/>no GitHub client| stuck
+  critic -.->|cap or no progress,<br/>no GitHub client| stuck
+  verify -.->|"clean, no GitHub client<br/>(stub)"| done
+  critic -.->|"no blockers, no GitHub client<br/>(stub)"| done
   draft --> stuck["escalate_stuck<br/>(retry / retry with a note / close)"]
   rb --> build
   openpr -->|push or PR failed| FAIL
