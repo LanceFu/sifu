@@ -608,7 +608,9 @@ def test_a_plan_request_gets_a_chat_with_the_plan_beside_it(
     result = DecisionResult(floor_tier=RiskTier.HUMAN, final_tier=RiskTier.HUMAN, rules_fired=["x"])
     decision = db.record_decision(conn, ticket, DecisionType.ACCEPT_PLAN, result, [])
     db.set_status(conn, ticket, TicketStatus.NEEDS_HUMAN)
-    request = db.open_human_request(conn, ticket, "Approve this plan?", ["approve", "close"], decision)
+    request = db.open_human_request(
+        conn, ticket, "Approve this plan?", ["approve", "close"], decision
+    )
     conn.close()
     (tmp_path / str(ticket)).mkdir()
     (tmp_path / str(ticket) / "plan.md").write_text("# Plan\nStep 1: reorder in DayPlan.swift")
@@ -768,7 +770,9 @@ git commit -m "Lessons from the Settings tab: preview the conventions.md change,
 
 ```python
 def test_only_finished_tickets_with_a_worktree_on_disk_are_listed(wt_home, cfg):
-    path, done, building = wt_home  # fixture: db path, a done ticket and a build ticket, each with a worktree
+    path, done, building = (
+        wt_home  # fixture: db path, a done ticket and a build ticket, each with a worktree
+    )
     assert [w["ticket_id"] for w in ops.stale_worktrees(path, cfg=cfg)] == [done]
 
 

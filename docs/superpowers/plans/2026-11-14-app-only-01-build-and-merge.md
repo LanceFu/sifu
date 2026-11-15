@@ -66,7 +66,11 @@
 def test_a_job_moves_from_queued_to_running_to_done(conn, ticket):
     job = db.create_job(conn, "run", {"ticket_id": ticket, "live": False}, ticket)
     [row] = db.list_jobs(conn)
-    assert (row["status"], row["kind"], json.loads(row["payload"])["live"]) == ("queued", "run", False)
+    assert (row["status"], row["kind"], json.loads(row["payload"])["live"]) == (
+        "queued",
+        "run",
+        False,
+    )
     assert db.start_job(conn, job) is True and db.start_job(conn, job) is False
     assert db.list_jobs(conn)[0]["started_at"] is not None
     db.finish_job(conn, job, result="spec")
@@ -425,6 +429,7 @@ The three `start_in_database` tests at the end of `tests/test_router_flow.py` sh
 ```python
 """The app's writes, by database path: create, run, answer and continue a ticket."""
 
+
 @pytest.fixture()
 def home(tmp_path, cfg, monkeypatch):
     """A product repo, a database path and artifacts under tmp_path. Returns the database path."""
@@ -489,7 +494,9 @@ def test_answer_resumes_a_paused_ticket_in_either_mode(home, cfg, monkeypatch):
 
 def test_continue_to_build_uses_the_live_wiring(home, cfg, monkeypatch):
     monkeypatch.setattr(
-        live, "open_live", lambda db_path, *, cfg=None, llm=None, **kw: demo.open_demo(cfg, llm, str(db_path))
+        live,
+        "open_live",
+        lambda db_path, *, cfg=None, llm=None, **kw: demo.open_demo(cfg, llm, str(db_path)),
     )
     cfg.planner.enabled = False
     ticket = ops.create_ticket(home, "T", BODY, cfg=cfg)
@@ -681,7 +688,9 @@ def test_recover_marks_jobs_left_by_a_dead_process_once_per_database(path, monke
     assert rows(path)[0]["status"] == "queued"
 
 
-def test_recover_does_not_touch_a_database_without_a_jobs_table_or_without_stale_jobs(tmp_path, monkeypatch):
+def test_recover_does_not_touch_a_database_without_a_jobs_table_or_without_stale_jobs(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(jobs, "_RECOVERED", set())
     old = tmp_path / "old.db"
     conn = db.connect(old)
@@ -860,8 +869,9 @@ def no_real_work(monkeypatch):
     monkeypatch.setattr(
         jobs,
         "submit",
-        lambda path, kind, payload, ticket_id=None: submitted.append((kind, payload, ticket_id))
-        or len(submitted),
+        lambda path, kind, payload, ticket_id=None: (
+            submitted.append((kind, payload, ticket_id)) or len(submitted)
+        ),
     )
     monkeypatch.setattr(jobs, "recover", lambda path: 0)
     monkeypatch.setattr(live, "missing_tools", lambda cfg=None: ["No GitHub token found."])

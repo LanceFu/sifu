@@ -171,7 +171,9 @@ def test_a_note_with_the_retry_reaches_the_implementer_as_a_finding(
 
 def test_a_retry_that_gives_up_again_asks_again(conn, cfg, make_deps, make_ticket):
     cfg.router.max_build_iterations = 1
-    deps, ticket, _ = run(make_deps, make_ticket, Implementer(), Verifier(failing("a"), failing("b")))
+    deps, ticket, _ = run(
+        make_deps, make_ticket, Implementer(), Verifier(failing("a"), failing("b"))
+    )
     state = resume_ticket(deps, ticket, "retry")
     assert is_paused(state) and len(db.open_requests(conn)) == 1
 
@@ -374,7 +376,9 @@ def test_reopening_a_failed_ticket_runs_the_design_stage_again_from_a_clean_stat
     deps = make_deps(FakeLLM())
     ticket = failed_ticket(deps, conn, make_ticket)
     state = reopen_ticket(deps, ticket)
-    assert is_paused(state) and status(conn, ticket) == "needs_human"  # asks again, as the first time
+    assert (
+        is_paused(state) and status(conn, ticket) == "needs_human"
+    )  # asks again, as the first time
     assert state.get("round", 0) == 0 and "answer" not in state  # nothing carried over
     kinds = [e["kind"] for e in db.list_events(conn, ticket)]
     assert kinds.count("design_started") == 2 and "ticket_reopened" in kinds
@@ -595,7 +599,11 @@ def test_a_stuck_build_can_be_retried_with_a_note(database, monkeypatch, no_real
     at.text_input(key=f"note-{request}").set_value("use trimmingCharacters").run()
     next(b for b in at.button if b.key == f"answer-{request}-retry").click().run()
     assert no_real_work == [
-        ("answer", {"request_id": request, "answer": "retry: use trimmingCharacters", "live": True}, ticket)
+        (
+            "answer",
+            {"request_id": request, "answer": "retry: use trimmingCharacters", "live": True},
+            ticket,
+        )
     ]
 
 
