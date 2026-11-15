@@ -25,7 +25,7 @@ from sifu.llm import LLM, OllamaLLM, StructuredOutcome, structured_call
 from sifu.reviewers import PROMPTS_DIR
 
 ROOT = Path(__file__).resolve().parents[2]
-STAGES = ("intent", "spec")
+STAGES = ("intent", "spec", "plan")
 _GWT = re.compile(r"\bgiven\b.*\bwhen\b.*\bthen\b", re.IGNORECASE | re.DOTALL)
 _REQ_ID = re.compile(r"\bREQ-\d+\b")
 

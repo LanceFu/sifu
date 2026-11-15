@@ -599,3 +599,45 @@ def test_the_ticket_tab_shows_token_use_against_the_budget(database):
     conn.close()
     page = text(run("Ticket"))
     assert "1,500 of" in page and "model tokens" in page
+
+
+def test_a_plan_request_gets_a_chat_with_the_plan_beside_it(
+    database, monkeypatch, tmp_path, no_real_work
+):
+    conn = db.connect(database)
+    ticket = db.create_ticket(conn, 1, "Reorder Stops", "As a Traveller I reorder Stops.")
+    result = DecisionResult(floor_tier=RiskTier.HUMAN, final_tier=RiskTier.HUMAN, rules_fired=["x"])
+    decision = db.record_decision(conn, ticket, DecisionType.ACCEPT_PLAN, result, [])
+    db.set_status(conn, ticket, TicketStatus.NEEDS_HUMAN)
+    request = db.open_human_request(
+        conn, ticket, "Approve this plan?", ["approve", "close"], decision
+    )
+    conn.close()
+    (tmp_path / str(ticket)).mkdir()
+    (tmp_path / str(ticket) / "plan.md").write_text("# Plan\nStep 1: reorder in DayPlan.swift")
+    monkeypatch.setattr(demo, "artifacts_dir", lambda path, cfg=None: tmp_path)
+    calls = []
+    monkeypatch.setattr(brainstorm, "reply_in_database", fake_reply(calls, draft="Keep Stop ids."))
+    ready(monkeypatch)
+    at = open_ticket(ticket)
+    assert "Step 1: reorder in DayPlan.swift" in text(at)
+    at.chat_input(key=f"spec-input-ticket-{ticket}-request-{request}").set_value("Why?").run()
+    assert (calls[0]["stage"], "DayPlan.swift" in calls[0]["document"]) == ("plan", True)
+
+
+def test_a_plan_request_without_build_tools_shows_what_is_missing_instead_of_buttons(
+    database, monkeypatch, tmp_path
+):
+    conn = db.connect(database)
+    ticket = db.create_ticket(conn, 1, "Reorder Stops")
+    result = DecisionResult(floor_tier=RiskTier.HUMAN, final_tier=RiskTier.HUMAN, rules_fired=["x"])
+    decision = db.record_decision(conn, ticket, DecisionType.ACCEPT_PLAN, result, [])
+    db.set_status(conn, ticket, TicketStatus.NEEDS_HUMAN)
+    request = db.open_human_request(
+        conn, ticket, "Approve this plan?", ["approve", "close"], decision
+    )
+    conn.close()
+    monkeypatch.setattr(demo, "artifacts_dir", lambda path, cfg=None: tmp_path)
+    at = open_ticket(ticket)
+    assert not [b for b in at.button if b.key == f"spec-answer-{request}-approve"]
+    assert "Answering needs: No GitHub token found." in text(at)

@@ -332,11 +332,24 @@ def can_reopen(conn: sqlite3.Connection, ticket_id: int) -> bool:
     return has_pr is None
 
 
-def design_request(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:
-    """The ticket's open request if it can be answered in the UI (a Design-stage one), else None."""
+CHAT_DECISIONS = {
+    None: "spec",
+    DecisionType.ACCEPT_SPEC.value: "spec",
+    DecisionType.ACCEPT_PLAN.value: "plan",
+}
+
+
+def chat_request(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:
+    """The ticket's open request when a person can talk it through before answering.
+
+    That is a questions request, a spec decision or a plan decision; the item's ``chat_stage``
+    says which chat. A merge decision and a stuck build or merge (retry or close) have none.
+    """
     for item in inbox(conn):
-        if item["ticket_id"] == ticket_id and not item["needs_live_tools"]:
-            return item
+        if item["ticket_id"] != ticket_id or "retry" in item["options"]:
+            continue
+        if item["stage"] in CHAT_DECISIONS:
+            return {**item, "chat_stage": CHAT_DECISIONS[item["stage"]]}
     return None
 
 

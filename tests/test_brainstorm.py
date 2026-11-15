@@ -64,6 +64,13 @@ def test_the_spec_chat_uses_its_own_persona_and_sees_the_document(ctx):
     assert result.draft == ""  # an empty draft is an answer here: nothing to change
 
 
+def test_the_plan_chat_has_its_own_persona(ctx):
+    llm = Scripted(turn(draft=""))
+    brainstorm.run_turn(llm, "m", ctx, "plan", said("Why this file?"), document="PLAN TEXT")
+    [call] = llm.calls
+    assert "Plan Coach" in call["system"] and "<document>\nPLAN TEXT" in call["user"]
+
+
 def test_an_intent_turn_that_drops_the_draft_keeps_the_one_already_written(ctx):
     llm = Scripted(turn(title="", draft=" "))
     result, _ = brainstorm.run_turn(

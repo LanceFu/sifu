@@ -211,7 +211,7 @@ def test_a_saved_chat_is_a_key_event_on_the_timeline(conn, project):
     assert (row["summary"], row["detail"]) == ("intent chat, 4 messages", ["/a/chat.md"])
 
 
-def test_design_request_is_the_open_request_the_ui_can_answer(conn, project):
+def test_chat_request_is_the_open_request_a_person_can_talk_through(conn, project):
     spec = db.create_ticket(conn, project, "Rename a Trip")
     db.open_human_request(conn, spec, "Approve?", ["approve", "close"], decide(conn, spec))
     merge = db.create_ticket(conn, project, "Limit a Day Plan")
@@ -219,9 +219,25 @@ def test_design_request_is_the_open_request_the_ui_can_answer(conn, project):
         conn, merge, "Merge?", ["approve", "close"], decide(conn, merge, DecisionType.MERGE)
     )
     idle = db.create_ticket(conn, project, "Remove a Stop")
-    assert ui_data.design_request(conn, spec)["question"] == "Approve?"
-    assert ui_data.design_request(conn, merge) is None
-    assert ui_data.design_request(conn, idle) is None
+    assert ui_data.chat_request(conn, spec)["question"] == "Approve?"
+    assert ui_data.chat_request(conn, merge) is None
+    assert ui_data.chat_request(conn, idle) is None
+    plan = db.create_ticket(conn, project, "Reorder Stops")
+    db.open_human_request(
+        conn,
+        plan,
+        "Approve plan?",
+        ["approve", "close"],
+        decide(conn, plan, DecisionType.ACCEPT_PLAN),
+    )
+    assert ui_data.chat_request(conn, plan)["chat_stage"] == "plan"
+    assert ui_data.chat_request(conn, spec)["chat_stage"] == "spec"
+
+
+def test_a_stuck_build_request_is_not_a_chat_request(conn, project):
+    stuck = db.create_ticket(conn, project, "Rename a Trip")
+    db.open_human_request(conn, stuck, "Build stopped", ["retry", "retry with a note", "close"])
+    assert ui_data.chat_request(conn, stuck) is None
 
 
 def test_jobs_are_read_newest_first_and_the_active_one_is_found(conn, project):

@@ -276,17 +276,21 @@ def _start(db_path: Path, title: str, body: str, session: str | None) -> None:
 
 
 def _request_document(db_path: Path, ticket: sqlite3.Row, request: dict[str, Any]) -> str:
-    """What a spec chat is about: the spec the router stopped, when there is one on disk."""
-    if request["stage"] != "accept_spec":
-        return ""  # a questions request carries the questions in its own text
-    path = demo.artifacts_dir(db_path) / str(ticket["id"]) / "spec.md"
-    return path.read_text(encoding="utf-8") if path.is_file() else ""
+    """What a request chat is about: the plan and spec the router stopped, when on disk."""
+    wanted = {"accept_spec": ["spec.md"], "accept_plan": ["plan.md", "spec.md"]}
+    folder = demo.artifacts_dir(db_path) / str(ticket["id"])
+    parts = []
+    for name in wanted.get(request["stage"], []):  # a questions request has its own text
+        path = folder / name
+        if path.is_file() and not path.is_symlink():
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n\n".join(parts)
 
 
-def show_spec_chat(
+def show_request_chat(
     conn: sqlite3.Connection, db_path: Path, ticket: sqlite3.Row, request: dict[str, Any]
 ) -> None:
-    """A waiting Design-stage request: the document, a chat about it and the answer to send."""
+    """A waiting spec or plan request: the document, a chat about it and the answer to send."""
     session = f"ticket-{ticket['id']}-request-{request['id']}"
     note_key = f"spec-note-{request['id']}"
     if (pending := st.session_state.pop(f"{note_key}-pending", None)) is not None:
@@ -314,15 +318,19 @@ def show_spec_chat(
             help="Answers or a revision note. It is added to the ticket and the spec is rewritten.",
         )
         chat = session if messages else None
-        slots = st.columns(len(request["actions"]) + 1)
-        for slot, action in zip(slots, request["actions"], strict=False):
-            if slot.button(action, key=f"spec-answer-{request['id']}-{action}"):
-                _answer(db_path, request, action, chat)
-        send = slots[-1].button(
-            "Send reply", key=f"spec-send-{request['id']}", disabled=not note.strip()
-        )
-        if send:
-            _answer(db_path, request, note.strip(), chat)
+        missing = _missing() if request["needs_live_tools"] else []
+        if missing:
+            st.caption("Answering needs: " + "; ".join(missing))
+        else:
+            slots = st.columns(len(request["actions"]) + 1)
+            for slot, action in zip(slots, request["actions"], strict=False):
+                if slot.button(action, key=f"spec-answer-{request['id']}-{action}"):
+                    _answer(db_path, request, action, chat)
+            send = slots[-1].button(
+                "Send reply", key=f"spec-send-{request['id']}", disabled=not note.strip()
+            )
+            if send:
+                _answer(db_path, request, note.strip(), chat)
     if prompt:
         document = "\n\n".join(
             part
@@ -336,7 +344,7 @@ def show_spec_chat(
         turn = _chat_turn(
             db_path,
             session,
-            "spec",
+            request["chat_stage"],
             prompt,
             draft=note,
             document=document,
@@ -435,8 +443,8 @@ def show_ticket(conn: sqlite3.Connection, db_path: Path, project_id: int | None)
     if worktree is not None:
         with st.expander("Diff"):
             st.code(ops.worktree_diff(worktree), language="diff")
-    if not active and (request := ui_data.design_request(conn, ticket_id)):
-        show_spec_chat(conn, db_path, ticket, request)
+    if not active and (request := ui_data.chat_request(conn, ticket_id)):
+        show_request_chat(conn, db_path, ticket, request)
     for chat in ui_data.chats(conn, ticket_id):
         count = len(chat["messages"])
         with st.expander(f"Chat log: {chat['stage']} ({count} messages)"):
@@ -474,8 +482,9 @@ def _answer(db_path: Path, item: dict[str, Any], answer: str, chat: str | None =
     ticket_id = item["ticket_id"]
     try:
         if chat:
+            stage = item.get("chat_stage", "spec")
             demo.archive_chat_in_database(
-                db_path, ticket_id, chat, "spec", f"chat-spec-{item['id']}.md"
+                db_path, ticket_id, chat, stage, f"chat-{stage}-{item['id']}.md"
             )
         payload = {"request_id": item["id"], "answer": answer, "live": not _missing()}
         jobs.submit(db_path, "answer", payload, ticket_id=ticket_id)
