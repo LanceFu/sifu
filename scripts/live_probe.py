@@ -23,12 +23,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from live_run import ROOT, open_live
-
 from sifu import db
 from sifu.demo import show_decisions
 from sifu.graph import Deps, is_paused, run_ticket
 from sifu.implementer import Implementer, ImplementerResult
+from sifu.live import ROOT, open_live
 from sifu.verify import Verifier
 
 # A ticket still open in TripPlanner (REQ-3 is "Planned"), so the implementer has work to do.
@@ -104,7 +103,7 @@ def main() -> None:
     db_path = ROOT / "data" / f"probe-{args.scenario}.db"
     for leftover in db_path.parent.glob(db_path.name + "*"):
         leftover.unlink()
-    deps, project_id = open_live("manual", db_path=str(db_path))
+    deps, project_id = open_live(str(db_path), merge_mode="manual")
     tag = f"probe-{args.scenario}-{time.strftime('%m%d%H%M')}"
     deps.implementer = Probe(Implementer(deps.cfg, tag=tag), args.scenario)
     deps.verifier = Verifier(deps.cfg, tag=tag)
