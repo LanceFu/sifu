@@ -29,7 +29,7 @@ from typing import Any
 
 import streamlit as st
 
-from sifu import brainstorm, db, demo, jobs, live, ops, preflight, settings, ui_data
+from sifu import brainstorm, db, demo, jobs, lessons, live, ops, preflight, settings, ui_data
 from sifu.evidence import DATA, open_recorded
 
 DB_ENV = "SIFU_UI_DB"  # open this database first instead of the newest one in data/
@@ -565,6 +565,53 @@ def _run_checks(db_path: Path) -> None:
     st.session_state.pop("live_missing", None)
 
 
+def _show_lessons(db_path: Path, cfg: Any) -> None:
+    """Lessons waiting for conventions.md: edit, preview the change, open its pull request."""
+    st.markdown("**Lessons**")
+    st.caption(
+        "Lessons go to conventions.md through a pull request that a person merges; "
+        "Sifu never merges it."
+    )
+    approved = Path(cfg.workspace.product_repo_path).expanduser() / "conventions.md"
+    proposed = demo.artifacts_dir(db_path) / "conventions.proposed.md"
+    rows = [{"lesson": text, "evidence": ""} for text in lessons.pending(approved, proposed)]
+    edited = st.data_editor(
+        rows or [{"lesson": "", "evidence": ""}],
+        key="lessons_editor",
+        num_rows="dynamic",
+        column_config={"lesson": "Lesson", "evidence": "Evidence (for the pull request)"},
+    )
+    to_send = [dict(r) for r in edited.to_dict("records")] if hasattr(edited, "to_dict") else edited
+    to_send = [
+        {"lesson": r.get("lesson") or "", "evidence": r.get("evidence") or ""} for r in to_send
+    ]
+    preview, send = st.columns(2)
+    if preview.button("Preview", key="lessons_preview"):
+        try:
+            with st.spinner("Preparing the change…"):
+                st.session_state["lessons_result"] = ops.preview_lessons(db_path, to_send)
+        except Exception as exc:  # shown to the person; nothing is left behind
+            st.session_state.pop("lessons_result", None)
+            st.error(str(exc))
+    if result := st.session_state.get("lessons_result"):
+        st.code(result["diff"], language="diff")
+        st.caption(f"Router: tier {result['tier']}; rules fired: {', '.join(result['rules'])}")
+        for lesson in result["skipped"]:
+            st.caption(f"Already in conventions.md: {lesson}")
+    missing = _missing()
+    if missing:
+        st.caption("Opening the pull request needs: " + "; ".join(missing))
+    if send.button("Open pull request", key="lessons_send", disabled=bool(missing)):
+        try:
+            jobs.submit(db_path, "lessons", {"lessons": to_send})
+        except Exception as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.pop("lessons_result", None)
+            st.session_state["notice"] = "The lessons pull request is being opened."
+            st.rerun()
+
+
 def show_settings(conn: sqlite3.Connection, db_path: Path) -> None:
     """Setup checks, run options and the read-only configuration; writes only in callbacks."""
     cfg = ops.effective_config(db_path)
@@ -600,6 +647,7 @@ def show_settings(conn: sqlite3.Connection, db_path: Path) -> None:
     st.button("Use config.yaml values", key="opt-reset", on_click=_reset_options, args=(db_path,))
     st.markdown("**Configuration (read-only)**")
     st.json(cfg.model_dump(), expanded=False)
+    _show_lessons(db_path, cfg)
     st.markdown("**New database**")
     name = st.text_input("Name", key="db_name", help="Lowercase letters, digits and hyphens.")
     if st.button("Create database", key="db_create"):

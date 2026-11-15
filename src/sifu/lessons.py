@@ -35,3 +35,23 @@ def propose_lesson(
         proposed_path.parent.mkdir(parents=True, exist_ok=True)
         proposed_path.write_text(approved_path.read_text(encoding="utf-8"), encoding="utf-8")
     return append_lesson(proposed_path, lesson, ticket_id)
+
+
+def pending(approved: str | Path, proposed: str | Path) -> list[str]:
+    """Lessons the proposed copy holds that the approved conventions do not, without the "- "."""
+    proposed_path = Path(proposed)
+    if not proposed_path.exists():
+        return []
+    approved_path = Path(approved)
+    known = (
+        set(approved_path.read_text(encoding="utf-8").splitlines())
+        if approved_path.exists()
+        else set()
+    )
+    found, in_lessons = [], False
+    for line in proposed_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            in_lessons = line.strip() == HEADING
+        elif in_lessons and line.startswith("- ") and line not in known:
+            found.append(line[2:])
+    return found

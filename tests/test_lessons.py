@@ -1,4 +1,4 @@
-from sifu.lessons import append_lesson, propose_lesson
+from sifu.lessons import append_lesson, pending, propose_lesson
 
 BASE = "# Conventions\n\n## Build\n\n- swift test\n\n## Lessons\n\n<!-- Sifu appends here -->\n"
 
@@ -26,3 +26,13 @@ def test_propose_lesson_leaves_the_approved_file_untouched(tmp_path):
     propose_lesson(approved, proposed, "Spec edits need tests.", ticket_id=2)
     assert approved.read_text() == BASE
     assert "Spec edits need tests." in proposed.read_text() and "swift test" in proposed.read_text()
+
+
+def test_pending_is_what_the_proposed_copy_adds_to_the_approved_one(tmp_path):
+    approved = tmp_path / "conventions.md"
+    proposed = tmp_path / "conventions.proposed.md"
+    approved.write_text("# Conventions\n\n## Lessons\n- Old rule.\n")
+    assert pending(approved, proposed) == []  # no proposed copy yet
+    propose_lesson(approved, proposed, "Trim names before checking them.", 4)
+    propose_lesson(approved, proposed, "Old rule.")
+    assert pending(approved, proposed) == ["(ticket 4) Trim names before checking them."]

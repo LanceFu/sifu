@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
-from sifu import db, demo, settings
+from sifu import db, demo, lessons_pr, settings
 from sifu import live as live_wiring
 from sifu.config import Config, load_config
 from sifu.evidence import DATA
 from sifu.graph import Deps, continue_ticket, reopen_ticket, resume_interrupted, run_ticket
 from sifu.implementer import git_output
+from sifu.lessons_pr import Lesson
 from sifu.llm import LLM
 
 DATABASE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
@@ -64,6 +66,37 @@ def worktree_diff(worktree: Path, limit: int = 200_000) -> str:
     if len(text) > limit:
         text = text[:limit] + f"\n(diff cut at {limit} characters)"
     return text
+
+
+def _lessons(rows: list[dict[str, str]]) -> list[Lesson]:
+    """Lesson objects from editor rows; blank rows are dropped, and an empty result is refused."""
+    lessons = [Lesson(**row) for row in rows if str(row.get("lesson", "")).strip()]
+    if not lessons:
+        raise ValueError("no lessons to send")
+    return lessons
+
+
+def preview_lessons(
+    db_path: str | Path, lessons: list[dict[str, str]], *, cfg: Config | None = None
+) -> dict[str, Any]:
+    """Dry run: the conventions.md diff and the router's decision; nothing is pushed."""
+    return lessons_pr.run(
+        effective_config(db_path, cfg), _lessons(lessons), push=False, project="TripPlanner"
+    )
+
+
+def send_lessons(
+    db_path: str | Path, lessons: list[dict[str, str]], *, cfg: Config | None = None
+) -> str:
+    """Open the pull request that adds the lessons to conventions.md; return its URL."""
+    out = lessons_pr.run(
+        effective_config(db_path, cfg),
+        _lessons(lessons),
+        push=True,
+        db_path=db_path,
+        project="TripPlanner",
+    )
+    return str(out["pr_url"])
 
 
 def effective_config(db_path: str | Path, cfg: Config | None = None) -> Config:

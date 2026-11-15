@@ -10,6 +10,7 @@ from sifu import (  # noqa: E402
     db,
     demo,
     jobs,
+    lessons,
     live,
     ops,
     preflight,
@@ -641,3 +642,27 @@ def test_a_plan_request_without_build_tools_shows_what_is_missing_instead_of_but
     at = open_ticket(ticket)
     assert not [b for b in at.button if b.key == f"spec-answer-{request}-approve"]
     assert "Answering needs: No GitHub token found." in text(at)
+
+
+def test_lessons_are_previewed_then_sent_as_a_job(database, monkeypatch, no_real_work):
+    monkeypatch.setattr(lessons, "pending", lambda approved, proposed: ["(ticket 4) Trim names."])
+    monkeypatch.setattr(
+        ops,
+        "preview_lessons",
+        lambda path, rows, cfg=None: {
+            "diff": "+- Trim names.",
+            "tier": "HUMAN",
+            "rules": ["touches_protected_path"],
+            "added": ["Trim names."],
+            "skipped": [],
+            "pr_url": None,
+        },
+    )
+    ready(monkeypatch)
+    at = run("Settings")
+    at.button(key="lessons_preview").click().run()
+    assert "+- Trim names." in text(at) and "touches_protected_path" in text(at)
+    at.button(key="lessons_send").click().run()
+    [(kind, payload, ticket_id)] = no_real_work
+    assert kind == "lessons" and ticket_id is None
+    assert payload["lessons"][0]["lesson"] == "(ticket 4) Trim names."

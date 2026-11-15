@@ -200,3 +200,10 @@ def test_worktree_diff_shows_changes_and_new_files_and_is_capped(tmp_path):
     assert "-one" in diff and "+two" in diff and "new.txt" in diff
     capped = ops.worktree_diff(repo, limit=40)
     assert len(capped) < 200 and capped.endswith("(diff cut at 40 characters)")
+
+
+def test_send_lessons_needs_at_least_one_lesson(home, cfg):
+    with pytest.raises(ValueError, match="no lessons to send"):
+        ops.send_lessons(home, [{"lesson": "  ", "evidence": ""}], cfg=cfg)
+    with pytest.raises(ValueError, match="no lessons to send"):
+        ops.preview_lessons(home, [], cfg=cfg)

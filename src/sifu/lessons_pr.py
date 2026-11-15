@@ -11,6 +11,7 @@ Each lesson carries the evidence it came from (a PR, a ticket, an eval run). The
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,7 +19,10 @@ from typing import Any, Protocol
 import yaml
 from pydantic import BaseModel, SecretStr
 
-from sifu.config import GithubConfig, RouterConfig
+from sifu import db
+from sifu.config import Config, GithubConfig, RouterConfig
+from sifu.credentials import get_github_token
+from sifu.github import GitHubClient
 from sifu.implementer import changed_files, git_output
 from sifu.lessons import append_lesson
 from sifu.models import DecisionContext, DecisionResult, DecisionType, RiskTier
@@ -152,3 +156,61 @@ def publish(
     )
     client.comment(number, render_decision(change.decision))
     return {"pr_number": number, "pr_url": url, "head_sha": sha, "branch": change.branch}
+
+
+LESSONS_DB = Path(__file__).resolve().parents[2] / "data" / "lessons.db"
+
+
+def run(
+    cfg: Config,
+    lessons: list[Lesson],
+    *,
+    push: bool,
+    db_path: str | Path | None = None,
+    project: str | None = None,
+    client: PullRequests | None = None,
+    token: SecretStr | None = None,
+    remote: str | None = None,
+) -> dict[str, Any]:
+    """Prepare the conventions.md change; on a dry run remove it, otherwise open its pull request.
+
+    Returns ``diff``, ``tier``, ``rules``, ``added``, ``skipped`` and ``pr_url`` (None on a dry
+    run). ``ValueError`` when every lesson is already there. With ``push`` the ticket, a MERGE
+    decision and a ``pr_opened`` event are recorded in ``db_path`` (default data/lessons.db). The
+    GitHub client and token are looked up only when no ``client`` is given.
+    """
+    repo = Path(cfg.workspace.product_repo_path).expanduser()
+    name = f"lessons-{time.strftime('%Y%m%d-%H%M%S')}"
+    change = prepare(
+        repo, cfg.workspace.worktrees_dir, lessons, cfg.router, name, base=cfg.github.base_branch
+    )
+    result: dict[str, Any] = {
+        "diff": change.diff,
+        "tier": change.decision.final_tier.name,
+        "rules": list(change.decision.rules_fired),
+        "added": [item.lesson for item in change.added],
+        "skipped": [item.lesson for item in change.skipped],
+        "pr_url": None,
+    }
+    if not push:
+        discard(repo, change.worktree, change.branch)
+        return result
+    if client is None:
+        client = GitHubClient.from_config(cfg.github)
+        token = get_github_token(cfg.github)  # a SecretStr; never printed
+    out = publish(change, cfg.github, client, token, remote)
+    conn = db.connect(db_path or LESSONS_DB)
+    try:
+        db.init_db(conn)
+        project_id = db.get_or_create_project(
+            conn, project or cfg.github.repo, str(repo), cfg.github.repo
+        )
+        ticket = db.create_ticket(
+            conn, project_id, f"Lessons for conventions.md ({len(change.added)})", change.diff
+        )
+        db.record_decision(conn, ticket, DecisionType.MERGE, change.decision, [])
+        db.append_event(conn, ticket, "pr_opened", "sifu", out)
+    finally:
+        conn.close()
+    result["pr_url"] = out["pr_url"]
+    return result

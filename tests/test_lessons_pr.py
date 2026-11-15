@@ -4,7 +4,9 @@ import subprocess
 
 import pytest
 
+from sifu import db, lessons_pr
 from sifu.config import GithubConfig, RouterConfig
+from sifu.implementer import git_output
 from sifu.lessons_pr import Lesson, load_lessons, prepare, publish, render_decision
 from sifu.models import RiskTier
 
@@ -91,3 +93,45 @@ def test_lessons_load_from_yaml(tmp_path):
     path = tmp_path / "l.yaml"
     path.write_text('- lesson: A rule.\n  evidence: "PR #4"\n')  # quoted: # starts a comment
     assert load_lessons(path) == [Lesson(lesson="A rule.", evidence="PR #4")]
+
+
+@pytest.fixture
+def set_up(cfg, repo, tmp_path):
+    """The shared config pointed at the temporary product repo, with conventions.md protected."""
+    cfg.workspace.product_repo_path = str(repo)
+    cfg.workspace.worktrees_dir = str(tmp_path / "wt-run")
+    cfg.router.protected_paths = ["conventions.md", ".github/"]
+    return cfg
+
+
+def test_run_dry_returns_the_diff_and_decision_and_leaves_nothing_behind(repo, set_up):
+    out = lessons_pr.run(set_up, [Lesson(lesson="Trim names.", evidence="ticket 4")], push=False)
+    assert "+- Trim names." in out["diff"] and out["tier"] == "HUMAN"
+    assert out["pr_url"] is None and out["added"] == ["Trim names."]
+    assert git_output(repo, "branch", "--list", "sifu/lessons-*").strip() == ""
+
+
+def test_run_with_nothing_new_raises_and_leaves_nothing_behind(repo, set_up):
+    with pytest.raises(ValueError, match="already in conventions.md"):
+        lessons_pr.run(set_up, [Lesson(lesson="Keep it short.", evidence="e")], push=False)
+    assert git_output(repo, "branch", "--list", "sifu/lessons-*").strip() == ""
+
+
+def test_run_push_opens_the_pr_and_records_it_as_a_ticket(repo, set_up, tmp_path):
+    remote = tmp_path / "remote.git"
+    git("init", "--bare", "-q", str(remote), cwd=tmp_path)
+    out = lessons_pr.run(
+        set_up,
+        [Lesson(lesson="Trim names.", evidence="ticket 4")],
+        push=True,
+        db_path=tmp_path / "l.db",
+        project="TripPlanner",
+        client=FakeGitHub(),
+        token=None,
+        remote=str(remote),
+    )
+    assert out["pr_url"]
+    conn = db.connect(tmp_path / "l.db")
+    [ticket] = conn.execute("SELECT * FROM tickets").fetchall()
+    assert ticket["title"] == "Lessons for conventions.md (1)"
+    assert "pr_opened" in [e["kind"] for e in db.list_events(conn, ticket["id"])]
