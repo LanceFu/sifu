@@ -142,33 +142,32 @@ def fake_reply(calls, title="Reject blank Trip names", draft="Given a blank name
 
 
 def open_intent():
-    """The Intent tab after pressing the create button."""
-    at = run("Intent")
+    """The Board tab after pressing New ticket: the draft in place of the board."""
+    at = run("Board")
     at.button(key="intent_create").click().run()
     assert not at.exception, at.exception
     return at
 
 
-def test_the_intent_tab_shows_only_a_create_button_until_it_is_pressed(database):
-    at = run("Intent")
+def test_new_ticket_on_the_board_swaps_the_board_for_the_draft(database):
+    at = run("Board")
     assert at.button(key="intent_create").label == "New ticket"
-    assert not at.text_area and not at.chat_input
+    assert not at.text_area and not at.chat_input and "needs_human (2)" in text(at)
     at.button(key="intent_create").click().run()
-    assert [w.label for w in (*at.text_input, *at.text_area)] == [
-        "Title",
-        "Description",
-    ]
-    assert len(at.chat_input) == 1
+    assert [w.label for w in (*at.text_input, *at.text_area)] == ["Title", "Description"]
+    assert len(at.chat_input) == 1 and at.button(key="intent_start").label == "Create"
+    assert {"**Chat**", "**Preview**"} <= {m.value for m in at.markdown}
+    assert "needs_human (2)" not in text(at)
 
 
-def test_cancel_goes_back_to_the_create_button_and_a_new_ticket_starts_clean(database, monkeypatch):
+def test_cancel_goes_back_to_the_board_and_a_new_ticket_starts_clean(database, monkeypatch):
     calls = []
     monkeypatch.setattr(brainstorm, "reply_in_database", fake_reply(calls))
     at = open_intent()
     at.chat_input(key="intent_input").set_value("Blank names save.").run()
     at.button(key="intent_cancel").click().run()
     assert not at.exception, at.exception
-    assert not at.text_area and at.button(key="intent_create")
+    assert not at.text_area and "needs_human (2)" in text(at)
     at.button(key="intent_create").click().run()
     assert chat_text(at) == [] and at.text_area(key="intent_body").value == ""
     assert len(db.list_chat(db.connect(database), calls[0]["session"])) == 2  # still stored
@@ -215,7 +214,7 @@ def test_a_reloaded_page_reopens_the_chat_named_in_the_url(database):
     db.add_chat_message(conn, session, "intent", "assistant", "Noted.", title="T", draft="D")
     conn.close()
     at = AppTest.from_file(ui.__file__, default_timeout=30)
-    at.session_state["view"] = "Intent"
+    at.session_state["view"] = "Board"
     at.query_params[ui.CHAT_PARAM] = session
     at.run()
     assert not at.exception, at.exception
@@ -246,9 +245,9 @@ def test_start_the_workflow_files_the_reviewed_draft_and_opens_the_ticket(databa
     ]
     assert at.session_state["view"] == "Ticket" and at.session_state["ticket"] == 3
     assert "Ticket #3 created; status is now spec." in [s.value for s in at.success]
-    at.session_state["view"] = "Intent"
+    at.session_state["view"] = "Board"
     at.run()
-    assert at.button(key="intent_create") and not at.text_area  # back to the create button
+    assert at.button(key="intent_create") and not at.text_area  # the board again
 
 
 def test_a_waiting_ticket_offers_the_spec_chat_with_the_spec_beside_it(

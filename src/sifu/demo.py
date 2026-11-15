@@ -214,7 +214,7 @@ def start_in_database(
 ) -> tuple[int, str]:
     """Create a ticket from a reviewed draft, run its Design stage and return (id, status).
 
-    This is the Intent tab's "Start the workflow". The Design stage writes ``intent.md`` from
+    This is the "Create" button on a new ticket's draft. The Design stage writes ``intent.md`` from
     the title and body, then a spec or questions. ``session`` is the brainstorm chat that led to
     the draft: it is linked to the ticket and written to ``chat-intent.md``. As with
     ``answer_in_database`` the planner is off, so an accepted spec waits at the plan gate.

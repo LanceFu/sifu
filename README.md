@@ -15,7 +15,7 @@ Course project for Agentic AI (University of Waterloo). The target product is th
 | Planner, headless Claude Code implementer, verify loop, GitHub PR and merge flow | Done; run live on `tripplanner-ios` (PRs #2 to #5) |
 | LLM critic pass | Done; off by default (`critic.enabled`) |
 | Evaluation (golden tickets against a single-prompt baseline, golden diffs for the critics) | Done; results in the notebook |
-| Streamlit UI (board, intent chat, ticket timeline with spec chat, inbox) | Done; see Streamlit UI |
+| Streamlit UI (board with new-ticket chat, ticket timeline with spec chat, inbox) | Done; see Streamlit UI |
 
 ## Setup
 
@@ -299,18 +299,18 @@ uv run --extra agents --extra ui streamlit run src/sifu/ui.py
 
 Pick a database from `data/` in the sidebar (set `SIFU_UI_DB` to open one first). Looking at a
 tab only reads the database; sending a chat message, starting a ticket and answering a request
-write to it. There are four tabs:
+write to it. There are three tabs:
 
-- **Board:** tickets by status, each with its pull request link.
-- **Intent:** press "New ticket" to open a draft: a title and a description, with a chat under
-  them to talk the change through with the model (`models.author`) before a ticket exists. The
-  model rewrites the title and description as you talk; edit them freely, and the next reply
-  builds on your edits. "Cancel" closes the draft. Captions under the draft list what the intent
-  template still lacks (a Given / When / Then line, a REQ id, `OPEN:` lines). "Start the
-  workflow" files the draft as a ticket and runs the Design stage: `intent.md` is rendered from
-  the draft, then the reviewers write a spec or questions. A low-risk spec is accepted by the
-  router as before; anything else stops for you. The planner is off for this run, so an accepted
-  spec waits before Build.
+- **Board:** tickets by status, each with its pull request link. "New ticket" swaps the board for
+  a draft: the chat is on the left, where you talk the change through with the model
+  (`models.author`) before a ticket exists, and the preview is on the right, with the title and
+  description as they would be filed. The model rewrites the preview as you talk; edit it
+  freely, and the next reply builds on your edits. Captions under the preview list what the
+  intent template still lacks (a Given / When / Then line, a REQ id, `OPEN:` lines). "Cancel"
+  goes back to the board. "Create" files the draft as a ticket and runs the Design stage:
+  `intent.md` is rendered from the draft, then the reviewers write a spec or questions. A
+  low-risk spec is accepted by the router as before; anything else stops for you. The planner
+  is off for this run, so an accepted spec waits before Build.
 - **Ticket:** one ticket's timeline. Router decisions show the floor and final tier, the rules
   that fired and each assessor's rationale. "Key events only" hides tool calls and status changes.
   A ticket stopped at a Design-stage request also shows the spec (or the questions) beside a

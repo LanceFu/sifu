@@ -1,13 +1,13 @@
-"""Sifu's Streamlit front end: a ticket board, an intent chat, a ticket timeline and the inbox.
+"""Sifu's Streamlit front end: a ticket board, a ticket timeline and the human inbox.
 
 Run it with ``uv run --extra agents --extra ui streamlit run src/sifu/ui.py``.
 
 The app is a thin layer over ``ui_data``. Looking at a tab reads the chosen database read-only.
 Three actions write to it, each through a function that is tested without Streamlit:
 
-- a chat message (the Intent tab, or the spec chat on a waiting ticket) is stored and answered
+- a chat message (a new ticket's draft, or the spec chat on a waiting ticket) is stored and answered
   by ``brainstorm.reply_in_database``;
-- "Start the workflow" creates a ticket from the reviewed draft and runs its Design stage
+- "Create" on a new ticket's draft files the reviewed draft and runs its Design stage
   through ``demo.start_in_database``;
 - an open Design-stage request is answered through ``demo.answer_in_database``.
 
@@ -30,9 +30,14 @@ from sifu import brainstorm, demo, ui_data
 from sifu.evidence import DATA, open_recorded
 
 DB_ENV = "SIFU_UI_DB"  # open this database first instead of the newest one in data/
-VIEWS = ("Board", "Intent", "Ticket", "Inbox")
+VIEWS = ("Board", "Ticket", "Inbox")
 CHAT_PARAM = "chat"  # the open intent chat's session id, kept in the URL so a reload keeps it
 _SESSION = re.compile(r"[0-9a-f]{32}")
+# A vertical rule between the chat and the preview; Streamlit only has a horizontal divider.
+_DIVIDER = (
+    '<div style="border-left: 1px solid rgba(128, 128, 128, 0.35); height: 640px; '
+    'margin: 0 auto; width: 0;"></div>'
+)
 
 
 def database_choices() -> list[Path]:
@@ -56,8 +61,30 @@ def _open_timeline(ticket_id: int) -> None:
     st.session_state["view"] = "Ticket"
 
 
-def show_board(conn: sqlite3.Connection, project_id: int | None) -> None:
-    """One column per status; each card links its pull request and can open the timeline."""
+def _drafting() -> bool:
+    """Whether the new-ticket draft is open; a reloaded page reopens the chat in its URL."""
+    if "intent_open" not in st.session_state:
+        linked = st.query_params.get(CHAT_PARAM, "")
+        st.session_state["intent_open"] = bool(_SESSION.fullmatch(linked))
+    return bool(st.session_state["intent_open"])
+
+
+def show_board(conn: sqlite3.Connection, db_path: Path, project_id: int | None) -> None:
+    """One column per status; each card links its pull request and can open the timeline.
+
+    "New ticket" swaps the board for the draft (a chat and the ticket preview) until the ticket
+    is created or the draft is cancelled.
+    """
+    if _drafting():
+        show_intent(conn, db_path)
+        return
+    st.button(
+        "New ticket",
+        icon=":material/add:",
+        type="primary",
+        on_click=_open_intent,
+        key="intent_create",
+    )
     columns = ui_data.board(conn, project_id)
     for slot, (status, cards) in zip(st.columns(len(columns)), columns.items(), strict=True):
         with slot:
@@ -117,12 +144,12 @@ def _intent_session() -> str:
 
 
 def _open_intent() -> None:
-    """Button callback: show the draft form for a new ticket."""
+    """Button callback: show the new ticket's draft in place of the board."""
     st.session_state["intent_open"] = True
 
 
 def _close_intent() -> None:
-    """Button callback: leave the draft (its chat stays in the database) and hide the form."""
+    """Button callback: leave the draft (its chat stays in the database) and show the board."""
     st.session_state.pop("intent_session", None)
     st.query_params.pop(CHAT_PARAM, None)
     st.session_state["intent_title"] = st.session_state["intent_body"] = ""
@@ -130,23 +157,8 @@ def _close_intent() -> None:
 
 
 def show_intent(conn: sqlite3.Connection, db_path: Path) -> None:
-    """A create button; then the draft (title, description), a chat about it and Start."""
-    if "intent_open" not in st.session_state:  # a reloaded page reopens the chat in its URL
-        linked = st.query_params.get(CHAT_PARAM, "")
-        st.session_state["intent_open"] = bool(_SESSION.fullmatch(linked))
-    if not st.session_state["intent_open"]:
-        st.caption(
-            "Create a ticket: draft its title and description, talk it through with the model, "
-            "then start the workflow."
-        )
-        st.button(
-            "New ticket",
-            icon=":material/add:",
-            type="primary",
-            on_click=_open_intent,
-            key="intent_create",
-        )
-        return
+    """A new ticket's draft: a chat on the left and the ticket preview on the right."""
+    st.markdown("#### New ticket")
     # A widget's value can only be set before the widget is built, so a new draft waits here.
     if (pending := st.session_state.pop("intent_pending", None)) is not None:
         st.session_state["intent_title"], st.session_state["intent_body"] = pending
@@ -154,31 +166,35 @@ def show_intent(conn: sqlite3.Connection, db_path: Path) -> None:
     messages = ui_data.chat_messages(conn, session)
     if "intent_body" not in st.session_state:  # a reloaded page picks its draft up again
         st.session_state["intent_title"], st.session_state["intent_body"] = _last_draft(messages)
-    title = st.text_input("Title", key="intent_title")
-    body = st.text_area("Description", key="intent_body", height=220)
-    for gap in brainstorm.draft_gaps(title, body):
-        st.caption(gap)
-    start, cancel, download, _ = st.columns([2, 1, 2, 5])
-    ready = bool(title.strip() and body.strip())
-    started = start.button(
-        "Start the workflow", type="primary", disabled=not ready, key="intent_start"
-    )
-    cancel.button("Cancel", on_click=_close_intent, key="intent_cancel")
-    if messages:
-        download.download_button(
-            "Download chat log",
-            brainstorm.transcript_md(messages, "Chat (intent)"),
-            file_name=f"chat-intent-{session[:8]}.md",
-            mime="text/markdown",
-            key="intent_download",
+    chat_col, rule, preview_col = st.columns([20, 1, 20])
+    with chat_col:
+        st.markdown("**Chat**")
+        st.caption("Talk the change through. The chat is saved as you go.")
+        _show_chat(messages, "No messages yet. Say what should change, and for whom.")
+        prompt = st.chat_input("What should change, and for whom?", key="intent_input")
+    rule.html(_DIVIDER)
+    with preview_col:
+        st.markdown("**Preview**")
+        st.caption(
+            "The ticket as it would be filed. The model rewrites it as you talk and you can "
+            "edit it; nothing is filed until you press Create."
         )
-    st.markdown("**Brainstorm**")
-    st.caption(
-        "The model rewrites the title and description above as you talk. Nothing is filed until "
-        "you start the workflow; the chat is saved as you go."
-    )
-    _show_chat(messages, "No messages yet. Say what should change, and for whom.", height=320)
-    prompt = st.chat_input("What should change, and for whom?", key="intent_input")
+        title = st.text_input("Title", key="intent_title")
+        body = st.text_area("Description", key="intent_body", height=300)
+        for gap in brainstorm.draft_gaps(title, body):
+            st.caption(gap)
+        start, cancel, download = st.columns([4, 2, 4])
+        ready = bool(title.strip() and body.strip())
+        started = start.button("Create", type="primary", disabled=not ready, key="intent_start")
+        cancel.button("Cancel", on_click=_close_intent, key="intent_cancel")
+        if messages:
+            download.download_button(
+                "Download chat log",
+                brainstorm.transcript_md(messages, "Chat (intent)"),
+                file_name=f"chat-intent-{session[:8]}.md",
+                mime="text/markdown",
+                key="intent_download",
+            )
     if prompt:
         turn = _chat_turn(db_path, session, "intent", prompt, title=title, draft=body)
         if turn is not None:
@@ -415,13 +431,10 @@ def main() -> None:
         # tab (the board's Timeline button sets it) and .open is true for that tab alone.
         if notice := st.session_state.pop("notice", None):
             st.success(notice)
-        board, intent, ticket, inbox = st.tabs(VIEWS, key="view", on_change="rerun")
+        board, ticket, inbox = st.tabs(VIEWS, key="view", on_change="rerun")
         if board.open:
             with board:
-                show_board(conn, project_id)
-        if intent.open:
-            with intent:
-                show_intent(conn, db_path)
+                show_board(conn, db_path, project_id)
         if ticket.open:
             with ticket:
                 show_ticket(conn, db_path, project_id)
