@@ -1,5 +1,6 @@
 """The Build and Test evidence tables come from a recorded database alone."""
 
+import json
 import sqlite3
 
 import pytest
@@ -112,3 +113,79 @@ def test_build_test_evidence_has_all_three_sections(recorded):
 def test_build_test_evidence_names_each_ticket_and_its_status(recorded):
     text = evidence.build_test_evidence(recorded)
     assert "Ticket 1: Limit a Day Plan to 10 Stops (status: intent)" in text
+
+
+SNAPSHOT = {
+    "captured_at": "2026-11-14",
+    "number": 2,
+    "title": "Reject blank Trip names | ticket 1",
+    "url": "https://github.com/LanceFu/tripplanner-ios/pull/2",
+    "state": "MERGED",
+    "created_at": "2026-11-06T23:04:35Z",
+    "merged_at": "2026-11-06T23:07:51Z",
+    "merged_by": "LanceFu",
+    "head_branch": "sifu/ticket-1",
+    "head_sha": "9abc542e0a08",
+    "merge_commit": "ebe6b67ba765",
+    "files": [{"path": "Sources/TripPlannerCore/Trip.swift", "additions": 3, "deletions": 2}],
+    "commits": [{"sha": "9abc542e0a08", "message": "Reject blank Trip names", "author": "Sifu"}],
+    "checks": [
+        {
+            "name": "test",
+            "conclusion": "SUCCESS",
+            "completed_at": "2026-11-06T23:05:46Z",
+            "url": "https://github.com/LanceFu/tripplanner-ios/actions/runs/1",
+        }
+    ],
+    "comments": [
+        {
+            "author": "LanceFu",
+            "created_at": "2026-11-06T23:06:48Z",
+            "url": "https://github.com/LanceFu/tripplanner-ios/pull/2#issuecomment-1",
+            "body": "Sifu merge decision: tier human.\n\n- gemma4: Small change.",
+        }
+    ],
+}
+
+
+@pytest.fixture()
+def snapshot(tmp_path):
+    path = tmp_path / "pr-2.json"
+    path.write_text(json.dumps(SNAPSHOT), encoding="utf-8")
+    return path
+
+
+def test_snapshot_shows_the_pr_check_files_and_comment(snapshot):
+    text = evidence.github_snapshot(snapshot)
+    assert "[#2](https://github.com/LanceFu/tripplanner-ios/pull/2)" in text
+    assert "Reject blank Trip names \\| ticket 1" in text  # the pipe is escaped
+    assert "`sifu/ticket-1` at `9abc542`" in text
+    assert "2026-11-06T23:07:51Z by LanceFu, commit `ebe6b67`" in text
+    assert "Required check `test`" in text and "SUCCESS" in text
+    assert "`Sources/TripPlannerCore/Trip.swift` | +3 -2" in text
+    assert "> Sifu merge decision: tier human." in text
+    assert "> - gemma4: Small change." in text
+
+
+def test_missing_database_falls_back_to_the_snapshot_and_says_so(tmp_path, snapshot):
+    text = evidence.build_test_evidence(tmp_path / "live.db", snapshot)
+    assert "database lost" in text
+    assert "verify rounds and the decision rows of this run cannot be shown" in text
+    assert "docs/recorded/pr-2.json" in text
+    assert "> Sifu merge decision: tier human." in text
+
+
+def test_missing_database_without_a_snapshot_still_says_not_found(tmp_path):
+    text = evidence.build_test_evidence(tmp_path / "live.db", tmp_path / "absent.json")
+    assert "not found" in text
+
+
+def test_a_present_database_wins_over_the_snapshot(recorded, snapshot):
+    text = evidence.build_test_evidence(recorded, snapshot)
+    assert "database lost" not in text
+    assert "**Verify rounds**" in text
+
+
+def test_the_saved_pr_2_snapshot_renders():
+    text = evidence.github_snapshot(evidence.RECORDED / "pr-2.json")
+    assert "pull/2" in text and "MERGED" in text and "merge_mode_manual" in text

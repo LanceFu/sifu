@@ -144,7 +144,7 @@ uv sync --extra agents
 uv run python -m sifu.demo --ticket clean      # needs Ollama and the models in config.yaml
 ```
 
-The same call is in `notebooks/design_stage_demo.ipynb`. Seed tickets are in `seed/tickets.yaml`.
+The same call is in `notebooks/sifu_demo.ipynb`. Seed tickets are in `seed/tickets.yaml`.
 
 ## Router, pause and resume
 
@@ -312,3 +312,9 @@ it read-only and has three views:
 `data/probe-once.db`, `data/probe-always.db`) as Markdown: verify rounds, router decisions and
 pull request events. It opens the file read-only and calls neither a model nor GitHub. The
 databases are git-ignored, so keep a copy: they are the only local record of those live runs.
+
+`data/live.db` (PR #2) was lost that way. `build_test_evidence(path, snapshot)` therefore takes
+an optional saved GitHub record, used only when the database is missing:
+`docs/recorded/pr-2.json` holds the pull request, its required check, the merge and the decision
+comment Sifu posted, read from GitHub once with `gh pr view`. It cannot show that run's verify
+rounds or decision rows.

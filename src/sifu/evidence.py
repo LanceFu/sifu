@@ -4,6 +4,9 @@ The live runs against GitHub (``scripts/live_run.py`` and ``scripts/live_probe.p
 audit trail in SQLite files under ``data/``. These functions turn that trail into Markdown tables:
 the verify rounds, the router's decisions and the pull request events. The database is opened
 read-only and nothing here calls a model or GitHub, so the notebook reruns without side effects.
+
+One run's database (``data/live.db``, PR #2) was lost. For that run ``github_snapshot`` renders
+what GitHub itself recorded, from a JSON file saved once under ``docs/recorded/``.
 """
 
 from __future__ import annotations
@@ -15,7 +18,9 @@ from typing import Any
 
 from sifu.models import RiskTier
 
-DATA = Path(__file__).resolve().parents[2] / "data"
+ROOT = Path(__file__).resolve().parents[2]
+DATA = ROOT / "data"
+RECORDED = ROOT / "docs" / "recorded"  # GitHub snapshots, kept in git
 PR_KINDS = ("pr_opened", "draft_pr_opened", "merge_blocked", "pr_merged")
 
 
@@ -137,12 +142,60 @@ def pr_table(conn: sqlite3.Connection) -> str:
     )
 
 
-def build_test_evidence(path: str | Path) -> str:
-    """All three tables for one recorded database, or a clear note when the file is missing."""
+def github_snapshot(path: str | Path) -> str:
+    """Render a saved GitHub record of one pull request: the PR, its check, files and comments.
+
+    The file was read from GitHub once and saved; nothing here calls GitHub. Sifu wrote the
+    comments itself from its decision record, so they carry the tier, rules and rationales.
+    """
+    pr = json.loads(Path(path).read_text(encoding="utf-8"))
+    facts = [
+        ["Pull request", f"[#{pr['number']}]({pr['url']}) {_cell(pr['title'])}"],
+        ["Branch and commit", f"`{pr['head_branch']}` at `{pr['head_sha'][:7]}`"],
+        ["Opened (UTC)", pr["created_at"]],
+        ["State", pr["state"]],
+    ]
+    if pr.get("merged_at"):
+        merge = f"{pr['merged_at']} by {pr['merged_by']}, commit `{pr['merge_commit'][:7]}`"
+        facts.append(["Merged (UTC)", merge])
+    for commit in pr.get("commits", []):
+        facts.append(["Commit author", f"{commit['author']}: {_cell(commit['message'])}"])
+    for check in pr.get("checks", []):
+        result = f"{check['conclusion']} at {check['completed_at']}"
+        facts.append([f"Required check `{check['name']}`", f"[{result}]({check['url']})"])
+    files = [[f"`{f['path']}`", f"+{f['additions']} -{f['deletions']}"] for f in pr["files"]]
+    comments = "\n\n".join(
+        f"[Comment]({c['url']}) by {c['author']} at {c['created_at']}:\n\n"
+        + "\n".join(f"> {line}" for line in c["body"].splitlines())
+        for c in pr.get("comments", [])
+    )
+    return (
+        f"{_table(['Field', 'Recorded on GitHub'], facts, 'no pull request')}\n\n"
+        f"**Files changed**\n\n{_table(['File', 'Lines'], files, 'no files')}\n\n"
+        f"**Comments posted on the pull request**\n\n{comments or '_none_'}"
+    )
+
+
+def build_test_evidence(path: str | Path, snapshot: str | Path | None = None) -> str:
+    """All three tables for one recorded database, or a clear note when the file is missing.
+
+    When the database is missing and ``snapshot`` names a saved GitHub record of the run's pull
+    request, that record is shown in its place, with a note on what it cannot show.
+    """
     name = Path(path).name
     try:
         conn = open_recorded(path)
     except FileNotFoundError:
+        if snapshot is not None and Path(snapshot).is_file():
+            captured = json.loads(Path(snapshot).read_text(encoding="utf-8"))["captured_at"]
+            return (
+                f"#### `{name}` (database lost; GitHub's record of the run)\n\n"
+                f"`{name}` is no longer in `data/`, so the verify rounds and the decision rows "
+                "of this run cannot be shown. What follows is GitHub's side of the same trail, "
+                f"read once on {captured} and saved in `docs/recorded/{Path(snapshot).name}`. "
+                "The comment is the one Sifu posted from its merge decision.\n\n"
+                f"{github_snapshot(snapshot)}"
+            )
         return f"**`{name}` not found.** Restore it to `data/` to show this run."
     try:
         tickets = "\n".join(
