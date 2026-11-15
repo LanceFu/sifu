@@ -40,6 +40,17 @@ _DIVIDER = (
 )
 
 
+# Statuses that need attention are colour coded wherever a status is shown.
+STATUS_COLOURS = {"needs_human": "yellow", "failed": "red"}
+
+
+def status_label(status: str, text: str | None = None) -> str:
+    """Markdown for a status: bold, and a coloured badge for the ones that need attention."""
+    text = text or status
+    colour = STATUS_COLOURS.get(status)
+    return f":{colour}-badge[**{text}**]" if colour else f"**{text}**"
+
+
 def database_choices() -> list[Path]:
     """The databases the sidebar offers: ``$SIFU_UI_DB`` first when set, then ``data/*.db``."""
     found = ui_data.list_databases(DATA)
@@ -88,7 +99,7 @@ def show_board(conn: sqlite3.Connection, db_path: Path, project_id: int | None) 
     columns = ui_data.board(conn, project_id)
     for slot, (status, cards) in zip(st.columns(len(columns)), columns.items(), strict=True):
         with slot:
-            st.markdown(f"**{status} ({len(cards)})**")
+            st.markdown(status_label(status, f"{status} ({len(cards)})"))
             for card in cards:
                 with st.container(border=True):
                     st.markdown(f"**#{card['id']}** {card['title']}")
@@ -314,7 +325,7 @@ def show_ticket(conn: sqlite3.Connection, db_path: Path, project_id: int | None)
         "Ticket", list(by_id), format_func=lambda i: f"#{i} {by_id[i]['title']}", key="ticket"
     )
     ticket = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
-    st.markdown(f"Status: **{ticket['status']}**")
+    st.markdown(f"Status: {status_label(ticket['status'])}")
     if by_id[ticket_id]["pr_url"]:
         st.markdown(f"[PR #{by_id[ticket_id]['pr_number']}]({by_id[ticket_id]['pr_url']})")
     with st.expander("Ticket text"):

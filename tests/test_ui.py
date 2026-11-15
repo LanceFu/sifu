@@ -65,6 +65,14 @@ def test_board_shows_each_ticket_in_its_column(database):
     assert f"[PR #2]({PR_URL})" in page
 
 
+def test_needs_human_is_yellow_and_failed_is_red_wherever_a_status_is_shown(database):
+    headers = [m.value for m in run("Board").markdown]
+    assert ":yellow-badge[**needs_human (2)**]" in headers
+    assert ":red-badge[**failed (0)**]" in headers
+    assert "**done (0)**" in headers and "**spec (0)**" in headers  # the rest stay plain
+    assert "Status: :yellow-badge[**needs_human**]" in text(run("Ticket"))
+
+
 def test_ticket_view_shows_the_timeline_with_the_decision(database):
     at = run("Ticket")
     page = text(at)
