@@ -61,6 +61,11 @@ class GitHubClient:
         pr = self._call("get pull request", self.repo.get_pull, number)
         self._call("comment", pr.create_issue_comment, body)
 
+    def mark_ready(self, number: int) -> None:
+        """Take a draft pull request out of draft."""
+        pr = self._call("get pull request", self.repo.get_pull, number)
+        self._call("mark ready", pr.mark_ready_for_review)
+
     def ci_status(self, sha: str) -> CIStatus:
         """The state of the required check on a commit. A missing check counts as pending."""
         commit = self._call("get commit", self.repo.get_commit, sha)
