@@ -36,6 +36,16 @@ def database_choices() -> list[Path]:
     return found
 
 
+def _open_timeline(ticket_id: int) -> None:
+    """Button callback: select the ticket and switch to the Ticket tab.
+
+    A callback runs before the next rerun builds the widgets, which is the only time the
+    selected tab and ticket can be set through session state.
+    """
+    st.session_state["ticket"] = ticket_id
+    st.session_state["view"] = "Ticket"
+
+
 def show_board(conn: sqlite3.Connection, project_id: int | None) -> None:
     """One column per status; each card links its pull request and can open the timeline."""
     columns = ui_data.board(conn, project_id)
@@ -49,10 +59,12 @@ def show_board(conn: sqlite3.Connection, project_id: int | None) -> None:
                         st.markdown(f"[PR #{card['pr_number']}]({card['pr_url']})")
                     if card["waiting"]:
                         st.caption("Waiting for you")
-                    if st.button("Timeline", key=f"open-{card['id']}"):
-                        st.session_state["ticket"] = card["id"]
-                        st.session_state["view"] = "Ticket"
-                        st.rerun()
+                    st.button(
+                        "Timeline",
+                        key=f"open-{card['id']}",
+                        on_click=_open_timeline,
+                        args=(card["id"],),
+                    )
 
 
 def show_ticket(conn: sqlite3.Connection, project_id: int | None) -> None:
@@ -137,7 +149,7 @@ def show_inbox(conn: sqlite3.Connection, db_path: Path) -> None:
 
 
 def main() -> None:
-    """Lay out the sidebar and the chosen view."""
+    """Lay out the sidebar and one tab per view; only the open tab's content is built."""
     st.set_page_config(page_title="Sifu", layout="wide")
     choices = database_choices()
     if not choices:
@@ -153,19 +165,23 @@ def main() -> None:
         project_id = st.selectbox(
             "Project", [None, *names], format_func=lambda i: names.get(i, "All projects")
         )
-        if st.session_state.get("view") not in VIEWS:
-            st.session_state["view"] = VIEWS[0]
-        view = st.radio("View", VIEWS, key="view")
         waiting = len(ui_data.inbox(conn))
         st.caption(f"{waiting} request{'' if waiting == 1 else 's'} waiting for you")
     try:
-        st.header(view)
-        if view == "Board":
-            show_board(conn, project_id)
-        elif view == "Ticket":
-            show_ticket(conn, project_id)
-        else:
-            show_inbox(conn, db_path)
+        if st.session_state.get("view") not in VIEWS:
+            st.session_state["view"] = VIEWS[0]
+        # on_change="rerun" makes the tabs track state: session_state["view"] holds the open
+        # tab (the board's Timeline button sets it) and .open is true for that tab alone.
+        board, ticket, inbox = st.tabs(VIEWS, key="view", on_change="rerun")
+        if board.open:
+            with board:
+                show_board(conn, project_id)
+        if ticket.open:
+            with ticket:
+                show_ticket(conn, project_id)
+        if inbox.open:
+            with inbox:
+                show_inbox(conn, db_path)
     finally:
         conn.close()
 

@@ -101,6 +101,21 @@ def test_clicking_an_option_answers_the_request(database, monkeypatch):
     assert calls == [(str(database), 1, "approve")]
 
 
+def test_the_views_are_tabs_and_only_the_open_one_is_built(database):
+    at = run("Board")
+    assert [tab.label for tab in at.tabs] == list(ui.VIEWS)
+    assert not at.radio
+    assert "needs_human (2)" in text(at) and "Approve this spec?" not in text(at)
+
+
+def test_the_timeline_button_opens_that_ticket_in_the_ticket_tab(database):
+    at = run("Board")
+    next(b for b in at.button if b.key == "open-2").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["view"] == "Ticket" and at.session_state["ticket"] == 2
+    assert "pr_opened" in text(at) and "needs_human (2)" not in text(at)
+
+
 def test_viewing_never_writes_to_the_database(database):
     before = database.read_bytes()
     for view in ("Board", "Ticket", "Inbox"):
