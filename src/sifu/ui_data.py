@@ -1,4 +1,4 @@
-"""Queries behind the Streamlit UI: the board, a ticket's timeline and the human inbox.
+"""Queries behind the Streamlit UI: the board, a ticket's timeline, the inbox and the chats.
 
 Everything here is a read over the audit tables in ``db.py`` and returns plain dicts and lists, so
 it is tested without Streamlit. ``ui.py`` only lays the results out.
@@ -39,6 +39,7 @@ KEY_KINDS = frozenset(
         "human_request_opened",
         "human_request_answered",
         "lesson_proposed",
+        "chat_saved",
         "ticket_closed",
         "error",
     }
@@ -145,6 +146,8 @@ def _summarise(kind: str, p: dict[str, Any]) -> tuple[str, list[str]]:
         return f"{len(p['findings'])} findings", [_finding(f) for f in p["findings"]]
     if kind == "agent_output":
         return str(p.get("path", "")), []
+    if kind == "chat_saved":
+        return f"{p.get('stage')} chat, {p.get('messages')} messages", [str(p.get("path", ""))]
     if kind == "human_request_opened":
         return f"request {p.get('request_id')}", []
     return ", ".join(f"{k}={v}" for k, v in p.items() if not isinstance(v, (dict, list))), []
@@ -239,3 +242,36 @@ def inbox(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             }
         )
     return items
+
+
+def design_request(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:
+    """The ticket's open request if it can be answered in the UI (a Design-stage one), else None."""
+    for item in inbox(conn):
+        if item["ticket_id"] == ticket_id and not item["needs_live_tools"]:
+            return item
+    return None
+
+
+def _chat_rows(conn: sqlite3.Connection, where: str, args: tuple[Any, ...]) -> list[sqlite3.Row]:
+    try:
+        return conn.execute(
+            f"SELECT * FROM chat_messages WHERE {where} ORDER BY id", args
+        ).fetchall()
+    except sqlite3.OperationalError:  # a database recorded before chats existed
+        return []
+
+
+def chat_messages(conn: sqlite3.Connection, session: str) -> list[dict[str, Any]]:
+    """One chat session's messages, oldest first; empty when the session or table is missing."""
+    return [dict(row) for row in _chat_rows(conn, "session = ?", (session,))]
+
+
+def chats(conn: sqlite3.Connection, ticket_id: int) -> list[dict[str, Any]]:
+    """The ticket's chat sessions in the order they began, each with its stage and messages."""
+    sessions: dict[str, dict[str, Any]] = {}
+    for row in _chat_rows(conn, "ticket_id = ?", (ticket_id,)):
+        entry = sessions.setdefault(
+            row["session"], {"session": row["session"], "stage": row["stage"], "messages": []}
+        )
+        entry["messages"].append(dict(row))
+    return list(sessions.values())

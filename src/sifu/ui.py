@@ -1,28 +1,38 @@
-"""Sifu's Streamlit front end: a ticket board, a ticket timeline and the human inbox.
+"""Sifu's Streamlit front end: a ticket board, an intent chat, a ticket timeline and the inbox.
 
 Run it with ``uv run --extra agents --extra ui streamlit run src/sifu/ui.py``.
 
-The app is a thin layer over ``ui_data``. It reads the chosen database read-only; the one thing
-it can change is an open Design-stage request, which it answers through
-``demo.answer_in_database``. Requests past the Design stage (plan and merge decisions) show the
-``scripts/live_run.py`` command instead, because resuming them needs the real implementer and
-GitHub client.
+The app is a thin layer over ``ui_data``. Looking at a tab reads the chosen database read-only.
+Three actions write to it, each through a function that is tested without Streamlit:
+
+- a chat message (the Intent tab, or the spec chat on a waiting ticket) is stored and answered
+  by ``brainstorm.reply_in_database``;
+- "Start the workflow" creates a ticket from the reviewed draft and runs its Design stage
+  through ``demo.start_in_database``;
+- an open Design-stage request is answered through ``demo.answer_in_database``.
+
+Requests past the Design stage (plan and merge decisions) show the ``scripts/live_run.py``
+command instead, because resuming them needs the real implementer and GitHub client.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
 
-from sifu import demo, ui_data
+from sifu import brainstorm, demo, ui_data
 from sifu.evidence import DATA, open_recorded
 
 DB_ENV = "SIFU_UI_DB"  # open this database first instead of the newest one in data/
-VIEWS = ("Board", "Ticket", "Inbox")
+VIEWS = ("Board", "Intent", "Ticket", "Inbox")
+CHAT_PARAM = "chat"  # the open intent chat's session id, kept in the URL so a reload keeps it
+_SESSION = re.compile(r"[0-9a-f]{32}")
 
 
 def database_choices() -> list[Path]:
@@ -67,8 +77,216 @@ def show_board(conn: sqlite3.Connection, project_id: int | None) -> None:
                     )
 
 
-def show_ticket(conn: sqlite3.Connection, project_id: int | None) -> None:
-    """A ticket's events, oldest first, with router decisions set apart."""
+def _show_chat(messages: list[dict[str, Any]], empty: str, height: int = 420) -> None:
+    """The conversation so far in a fixed-height box, read back from the database."""
+    with st.container(height=height):
+        if not messages:
+            st.caption(empty)
+        for message in messages:
+            st.chat_message(message["role"]).markdown(message["content"])
+
+
+def _chat_turn(
+    db_path: Path, session: str, stage: str, text: str, **draft: Any
+) -> brainstorm.BrainstormTurn | None:
+    """Store the person's message and get the model's turn; an error is shown, not raised."""
+    try:
+        with st.spinner("Thinking (this calls the local model)…"):
+            return brainstorm.reply_in_database(db_path, session, stage, text, **draft)
+    except Exception as exc:  # the person's message is already stored
+        st.error(f"The chat could not get a reply: {exc}")
+        return None
+
+
+def _last_draft(messages: list[dict[str, Any]]) -> tuple[str, str]:
+    """The draft as the model last left it: (title, text) from the newest assistant message."""
+    for message in reversed(messages):
+        if message["role"] == "assistant":
+            return message["title"] or "", message["draft"] or ""
+    return "", ""
+
+
+def _intent_session() -> str:
+    """This browser session's intent chat id: the one in the URL, else a new one."""
+    if "intent_session" not in st.session_state:
+        linked = st.query_params.get(CHAT_PARAM, "")
+        st.session_state["intent_session"] = (
+            linked if _SESSION.fullmatch(linked) else uuid.uuid4().hex
+        )
+    return st.session_state["intent_session"]
+
+
+def _open_intent() -> None:
+    """Button callback: show the draft form for a new ticket."""
+    st.session_state["intent_open"] = True
+
+
+def _close_intent() -> None:
+    """Button callback: leave the draft (its chat stays in the database) and hide the form."""
+    st.session_state.pop("intent_session", None)
+    st.query_params.pop(CHAT_PARAM, None)
+    st.session_state["intent_title"] = st.session_state["intent_body"] = ""
+    st.session_state["intent_open"] = False
+
+
+def show_intent(conn: sqlite3.Connection, db_path: Path) -> None:
+    """A create button; then the draft (title, description), a chat about it and Start."""
+    if "intent_open" not in st.session_state:  # a reloaded page reopens the chat in its URL
+        linked = st.query_params.get(CHAT_PARAM, "")
+        st.session_state["intent_open"] = bool(_SESSION.fullmatch(linked))
+    if not st.session_state["intent_open"]:
+        st.caption(
+            "Create a ticket: draft its title and description, talk it through with the model, "
+            "then start the workflow."
+        )
+        st.button(
+            "New ticket",
+            icon=":material/add:",
+            type="primary",
+            on_click=_open_intent,
+            key="intent_create",
+        )
+        return
+    # A widget's value can only be set before the widget is built, so a new draft waits here.
+    if (pending := st.session_state.pop("intent_pending", None)) is not None:
+        st.session_state["intent_title"], st.session_state["intent_body"] = pending
+    session = _intent_session()
+    messages = ui_data.chat_messages(conn, session)
+    if "intent_body" not in st.session_state:  # a reloaded page picks its draft up again
+        st.session_state["intent_title"], st.session_state["intent_body"] = _last_draft(messages)
+    title = st.text_input("Title", key="intent_title")
+    body = st.text_area("Description", key="intent_body", height=220)
+    for gap in brainstorm.draft_gaps(title, body):
+        st.caption(gap)
+    start, cancel, download, _ = st.columns([2, 1, 2, 5])
+    ready = bool(title.strip() and body.strip())
+    started = start.button(
+        "Start the workflow", type="primary", disabled=not ready, key="intent_start"
+    )
+    cancel.button("Cancel", on_click=_close_intent, key="intent_cancel")
+    if messages:
+        download.download_button(
+            "Download chat log",
+            brainstorm.transcript_md(messages, "Chat (intent)"),
+            file_name=f"chat-intent-{session[:8]}.md",
+            mime="text/markdown",
+            key="intent_download",
+        )
+    st.markdown("**Brainstorm**")
+    st.caption(
+        "The model rewrites the title and description above as you talk. Nothing is filed until "
+        "you start the workflow; the chat is saved as you go."
+    )
+    _show_chat(messages, "No messages yet. Say what should change, and for whom.", height=320)
+    prompt = st.chat_input("What should change, and for whom?", key="intent_input")
+    if prompt:
+        turn = _chat_turn(db_path, session, "intent", prompt, title=title, draft=body)
+        if turn is not None:
+            st.session_state["intent_pending"] = (turn.title, turn.draft)
+            st.query_params[CHAT_PARAM] = session
+            st.rerun()
+    if started:
+        _start(db_path, title, body, session if messages else None)
+
+
+def _start(db_path: Path, title: str, body: str, session: str | None) -> None:
+    """Create the ticket, run its Design stage and open it in the Ticket tab."""
+    try:
+        with st.spinner("Running the Design stage (this calls the local models)…"):
+            ticket_id, status = demo.start_in_database(db_path, title, body, session)
+    except Exception as exc:  # shown to the person; the draft stays so nothing typed is lost
+        st.error(
+            f"Could not finish the Design stage: {exc}. If a ticket was created it is on the "
+            "Board as failed; starting again creates a new one."
+        )
+        return
+    st.session_state.pop("intent_session", None)
+    st.query_params.pop(CHAT_PARAM, None)
+    st.session_state["intent_pending"] = ("", "")
+    st.session_state["intent_open"] = False
+    st.session_state["goto"] = ("Ticket", ticket_id)
+    st.session_state["notice"] = f"Ticket #{ticket_id} created; status is now {status}."
+    st.rerun()
+
+
+def _request_document(db_path: Path, ticket: sqlite3.Row, request: dict[str, Any]) -> str:
+    """What a spec chat is about: the spec the router stopped, when there is one on disk."""
+    if request["stage"] != "accept_spec":
+        return ""  # a questions request carries the questions in its own text
+    path = demo.artifacts_dir(db_path) / str(ticket["id"]) / "spec.md"
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
+def show_spec_chat(
+    conn: sqlite3.Connection, db_path: Path, ticket: sqlite3.Row, request: dict[str, Any]
+) -> None:
+    """A waiting Design-stage request: the document, a chat about it and the answer to send."""
+    session = f"ticket-{ticket['id']}-request-{request['id']}"
+    note_key = f"spec-note-{request['id']}"
+    if (pending := st.session_state.pop(f"{note_key}-pending", None)) is not None:
+        st.session_state[note_key] = pending
+    messages = ui_data.chat_messages(conn, session)
+    if note_key not in st.session_state:
+        st.session_state[note_key] = _last_draft(messages)[1]
+    spec = _request_document(db_path, ticket, request)
+    with st.container(border=True):
+        st.markdown(f"**Waiting for you** · request {request['id']}")
+        doc_col, chat_col = st.columns(2)
+        with doc_col:
+            st.markdown(request["question"])
+            if request["rules"]:
+                st.caption("Rules fired: " + ", ".join(request["rules"]))
+            if spec:
+                with st.container(height=320):
+                    st.code(spec, language="markdown", wrap_lines=True)
+        with chat_col:
+            _show_chat(messages, "No messages yet. Ask about the document before you answer.")
+            prompt = st.chat_input("Ask about this before you answer", key=f"spec-input-{session}")
+        note = st.text_area(
+            "Your reply to the Design stage",
+            key=note_key,
+            help="Answers or a revision note. It is added to the ticket and the spec is rewritten.",
+        )
+        chat = session if messages else None
+        slots = st.columns(len(request["actions"]) + 1)
+        for slot, action in zip(slots, request["actions"], strict=False):
+            if slot.button(action, key=f"spec-answer-{request['id']}-{action}"):
+                _answer(db_path, request, action, chat)
+        send = slots[-1].button(
+            "Send reply", key=f"spec-send-{request['id']}", disabled=not note.strip()
+        )
+        if send:
+            _answer(db_path, request, note.strip(), chat)
+    if prompt:
+        document = "\n\n".join(
+            part
+            for part in (
+                f"Ticket: {ticket['title']}\n{ticket['body']}",
+                f"Why it stopped: {request['question']}",
+                spec,
+            )
+            if part
+        )
+        turn = _chat_turn(
+            db_path,
+            session,
+            "spec",
+            prompt,
+            draft=note,
+            document=document,
+            ticket_id=ticket["id"],
+        )
+        if turn is not None:
+            st.session_state[f"{note_key}-pending"] = turn.draft
+            st.rerun()
+
+
+def show_ticket(conn: sqlite3.Connection, db_path: Path, project_id: int | None) -> None:
+    """A ticket's events, oldest first, with router decisions set apart.
+
+    A ticket waiting on a Design-stage request also gets the spec chat, and every saved chat of
+    the ticket can be read and downloaded.
+    """
     cards = [c for column in ui_data.board(conn, project_id).values() for c in column]
     if not cards:
         st.info("No tickets in this database.")
@@ -85,6 +303,20 @@ def show_ticket(conn: sqlite3.Connection, project_id: int | None) -> None:
         st.markdown(f"[PR #{by_id[ticket_id]['pr_number']}]({by_id[ticket_id]['pr_url']})")
     with st.expander("Ticket text"):
         st.text(ticket["body"] or "(empty)")
+    if request := ui_data.design_request(conn, ticket_id):
+        show_spec_chat(conn, db_path, ticket, request)
+    for chat in ui_data.chats(conn, ticket_id):
+        count = len(chat["messages"])
+        with st.expander(f"Chat log: {chat['stage']} ({count} messages)"):
+            for message in chat["messages"]:
+                st.chat_message(message["role"]).markdown(message["content"])
+            st.download_button(
+                "Download chat log",
+                brainstorm.transcript_md(chat["messages"], f"Chat ({chat['stage']})"),
+                file_name=f"chat-{chat['stage']}-ticket-{ticket_id}.md",
+                mime="text/markdown",
+                key=f"download-{chat['session']}",
+            )
     key_only = st.toggle("Key events only", value=True, key="key_only")
     for row in ui_data.timeline(conn, ticket_id, key_only=key_only):
         line = f"`{row['at']}` **{row['kind']}** · {row['actor']} — {row['summary']}"
@@ -101,10 +333,18 @@ def show_ticket(conn: sqlite3.Connection, project_id: int | None) -> None:
                         st.caption(item)
 
 
-def _answer(db_path: Path, item: dict[str, Any], answer: str) -> None:
-    """Answer a Design-stage request and report the ticket's new status."""
+def _answer(db_path: Path, item: dict[str, Any], answer: str, chat: str | None = None) -> None:
+    """Answer a Design-stage request and report the ticket's new status.
+
+    ``chat`` is the spec chat that led to the answer; it is written beside the ticket's artifacts
+    and logged on its timeline before the ticket resumes.
+    """
     try:
         with st.spinner("Resuming the ticket (this calls the local models)…"):
+            if chat:
+                demo.archive_chat_in_database(
+                    db_path, item["ticket_id"], chat, "spec", f"chat-spec-{item['id']}.md"
+                )
             status = demo.answer_in_database(db_path, item["id"], answer)
     except Exception as exc:  # shown to the person; the request stays open
         st.error(f"Could not resume ticket #{item['ticket_id']}: {exc}")
@@ -115,8 +355,6 @@ def _answer(db_path: Path, item: dict[str, Any], answer: str) -> None:
 
 def show_inbox(conn: sqlite3.Connection, db_path: Path) -> None:
     """Open human requests. Design-stage ones are answered here; later ones by command line."""
-    if notice := st.session_state.pop("notice", None):
-        st.success(notice)
     items = ui_data.inbox(conn)
     if not items:
         st.info("Nothing is waiting for you.")
@@ -156,6 +394,9 @@ def main() -> None:
         st.title("Sifu")
         st.info(f"No database in {DATA}. Run the demo notebook or scripts/live_run.py first.")
         return
+    # Starting a ticket asks for the Ticket tab; widget state can only be set before the widgets.
+    if goto := st.session_state.pop("goto", None):
+        st.session_state["view"], st.session_state["ticket"] = goto
     with st.sidebar:
         st.title("Sifu")
         db_path = st.selectbox("Database", choices, format_func=lambda p: p.name)
@@ -172,13 +413,18 @@ def main() -> None:
             st.session_state["view"] = VIEWS[0]
         # on_change="rerun" makes the tabs track state: session_state["view"] holds the open
         # tab (the board's Timeline button sets it) and .open is true for that tab alone.
-        board, ticket, inbox = st.tabs(VIEWS, key="view", on_change="rerun")
+        if notice := st.session_state.pop("notice", None):
+            st.success(notice)
+        board, intent, ticket, inbox = st.tabs(VIEWS, key="view", on_change="rerun")
         if board.open:
             with board:
                 show_board(conn, project_id)
+        if intent.open:
+            with intent:
+                show_intent(conn, db_path)
         if ticket.open:
             with ticket:
-                show_ticket(conn, project_id)
+                show_ticket(conn, db_path, project_id)
         if inbox.open:
             with inbox:
                 show_inbox(conn, db_path)

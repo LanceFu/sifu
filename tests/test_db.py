@@ -94,3 +94,24 @@ def test_get_or_create_project_is_idempotent(conn):
     first = db.get_or_create_project(conn, "TripPlanner", "/tmp/a", "o/r")
     assert db.get_or_create_project(conn, "TripPlanner", "/tmp/b") == first
     assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+
+
+def test_a_chat_is_stored_in_order_and_can_be_linked_to_its_ticket(conn, ticket):
+    db.add_chat_message(conn, "s1", "intent", "user", "Blank names save.")
+    db.add_chat_message(conn, "s1", "intent", "assistant", "Which?", title="T", draft="D")
+    db.add_chat_message(conn, "other", "intent", "user", "Something else.")
+    rows = db.list_chat(conn, "s1")
+    assert [(r["role"], r["content"], r["ticket_id"]) for r in rows] == [
+        ("user", "Blank names save.", None),
+        ("assistant", "Which?", None),
+    ]
+    assert (rows[1]["title"], rows[1]["draft"]) == ("T", "D")
+    assert db.attach_chat(conn, "s1", ticket) == 2
+    assert {r["ticket_id"] for r in db.list_chat(conn, "s1")} == {ticket}
+    assert db.list_chat(conn, "other")[0]["ticket_id"] is None
+
+
+def test_init_db_adds_the_chat_table_to_an_older_database(conn):
+    conn.execute("DROP TABLE chat_messages")
+    db.init_db(conn)
+    assert db.list_chat(conn, "s1") == []

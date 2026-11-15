@@ -14,10 +14,12 @@ from typing import Any
 import yaml
 
 from sifu import db
+from sifu.brainstorm import transcript_md
 from sifu.config import Config, load_config
 from sifu.context import ProductContext
 from sifu.graph import Deps, is_paused, resume_ticket, run_ticket, sqlite_checkpointer
 from sifu.llm import LLM, OllamaLLM
+from sifu.synthesizer import ticket_code, write_artifact
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,6 +33,12 @@ def load_seed_tickets(path: Path = ROOT / "seed" / "tickets.yaml") -> list[dict[
 def _db_name(db_path: str) -> str:
     """Artifacts go in a folder per database, because ticket ids restart in every database."""
     return "memory" if db_path == ":memory:" else Path(db_path).stem
+
+
+def artifacts_dir(db_path: str | Path, cfg: Config | None = None) -> Path:
+    """The folder that holds a database's ticket artifacts (intent.md, spec.md, chat logs)."""
+    cfg = cfg or load_config(ROOT / "config.yaml")
+    return ROOT / cfg.workspace.artifacts_dir / _db_name(str(db_path))
 
 
 def open_demo(
@@ -48,7 +56,7 @@ def open_demo(
         llm=llm,
         cfg=cfg,
         ctx=ProductContext.load(repo),
-        artifacts_dir=ROOT / cfg.workspace.artifacts_dir / _db_name(db_path),
+        artifacts_dir=artifacts_dir(db_path, cfg),
         checkpointer=sqlite_checkpointer(db_path),
     )
     return deps, project_id
@@ -153,6 +161,75 @@ def answer_in_database(
         ).fetchone()
         answer_request(deps, request_id, answer)
         return str(db.get_ticket(deps.conn, ticket_id["ticket_id"])["status"])
+    finally:
+        deps.conn.close()
+
+
+def archive_chat(
+    conn: Any, artifacts: Path, ticket_id: int, session: str, stage: str, name: str | None = None
+) -> Path | None:
+    """Link a chat to its ticket, write it beside the ticket's artifacts and log ``chat_saved``.
+
+    Returns the file's path, or None when the session has no messages.
+    """
+    count = db.attach_chat(conn, session, ticket_id)
+    if not count:
+        return None
+    heading = f"Chat ({stage}): {ticket_code(ticket_id)}"
+    path = write_artifact(
+        artifacts,
+        ticket_id,
+        name or f"chat-{stage}.md",
+        transcript_md(db.list_chat(conn, session), heading),
+    )
+    db.append_event(
+        conn,
+        ticket_id,
+        "chat_saved",
+        "human",
+        {"session": session, "stage": stage, "messages": count, "path": str(path)},
+    )
+    return path
+
+
+def archive_chat_in_database(
+    db_path: str | Path, ticket_id: int, session: str, stage: str, name: str | None = None
+) -> Path | None:
+    """``archive_chat`` on a database file; what the UI calls before it sends a spec answer."""
+    conn = db.connect(db_path)
+    try:
+        db.init_db(conn)
+        return archive_chat(conn, artifacts_dir(db_path), ticket_id, session, stage, name)
+    finally:
+        conn.close()
+
+
+def start_in_database(
+    db_path: str | Path,
+    title: str,
+    body: str,
+    session: str | None = None,
+    cfg: Config | None = None,
+    llm: LLM | None = None,
+) -> tuple[int, str]:
+    """Create a ticket from a reviewed draft, run its Design stage and return (id, status).
+
+    This is the Intent tab's "Start the workflow". The Design stage writes ``intent.md`` from
+    the title and body, then a spec or questions. ``session`` is the brainstorm chat that led to
+    the draft: it is linked to the ticket and written to ``chat-intent.md``. As with
+    ``answer_in_database`` the planner is off, so an accepted spec waits at the plan gate.
+    """
+    if not title.strip() or not body.strip():
+        raise ValueError("a ticket needs a title and a description")
+    cfg = (cfg or load_config(ROOT / "config.yaml")).model_copy(deep=True)
+    cfg.planner.enabled = False
+    deps, project_id = open_demo(cfg, llm, str(db_path))
+    try:
+        ticket_id = db.create_ticket(deps.conn, project_id, title.strip(), body.strip())
+        if session:
+            archive_chat(deps.conn, deps.artifacts_dir, ticket_id, session, "intent")
+        run_ticket(deps, ticket_id)
+        return ticket_id, str(db.get_ticket(deps.conn, ticket_id)["status"])
     finally:
         deps.conn.close()
 

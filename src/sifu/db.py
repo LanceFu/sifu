@@ -1,4 +1,4 @@
-"""SQLite persistence for projects, tickets, the event log, decisions and human requests.
+"""SQLite persistence for projects, tickets, the event log, decisions, requests and chats.
 
 LangGraph keeps its own checkpoints (keyed by ticket id as thread id). These tables are the
 application's audit trail and are what the UI and the evaluation harness read.
@@ -81,6 +81,18 @@ CREATE TABLE IF NOT EXISTS runs (
     ok INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY,
+    session TEXT NOT NULL,                    -- one brainstorm conversation
+    ticket_id INTEGER REFERENCES tickets(id), -- NULL until the intent chat becomes a ticket
+    stage TEXT NOT NULL,                      -- intent | spec
+    role TEXT NOT NULL,                       -- user | assistant
+    content TEXT NOT NULL,
+    title TEXT,                               -- the draft after an assistant message
+    draft TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS chat_messages_session ON chat_messages (session, id);
 """
 
 _RESOLUTION_BY_TIER = {
@@ -306,3 +318,43 @@ def record_run(
             (ticket_id, agent, model, prompt_tokens, completion_tokens, latency_ms, int(ok)),
         )
     return int(cur.lastrowid)
+
+
+def add_chat_message(
+    conn: sqlite3.Connection,
+    session: str,
+    stage: str,
+    role: str,
+    content: str,
+    *,
+    ticket_id: int | None = None,
+    title: str | None = None,
+    draft: str | None = None,
+) -> int:
+    """Append one brainstorm message to a chat session and return its id.
+
+    An assistant message also stores the draft (title and text) as it stood after that reply.
+    """
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO chat_messages (session, ticket_id, stage, role, content, title, draft)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session, ticket_id, stage, role, content, title, draft),
+        )
+    return int(cur.lastrowid)
+
+
+def list_chat(conn: sqlite3.Connection, session: str) -> list[sqlite3.Row]:
+    """Every message of one chat session, oldest first."""
+    return conn.execute(
+        "SELECT * FROM chat_messages WHERE session = ? ORDER BY id", (session,)
+    ).fetchall()
+
+
+def attach_chat(conn: sqlite3.Connection, session: str, ticket_id: int) -> int:
+    """Link a chat session to the ticket it produced; return how many messages it holds."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE chat_messages SET ticket_id = ? WHERE session = ?", (ticket_id, session)
+        )
+    return int(cur.rowcount)
