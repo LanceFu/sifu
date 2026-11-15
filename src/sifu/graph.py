@@ -1183,6 +1183,28 @@ def resume_ticket(
     return _invoke(deps, ticket_id, Command(resume=answer), prompts_dir)
 
 
+def continue_ticket(deps: Deps, ticket_id: int, prompts_dir: Path = PROMPTS_DIR) -> dict[str, Any]:
+    """Continue a ticket whose accepted spec stopped at the plan gate: plan (if on), then Build."""
+    graph = build_graph(deps, prompts_dir)
+    snapshot = graph.get_state(_thread(ticket_id))
+    facts = dict(snapshot.values.get("facts") or {})
+    status = db.get_ticket(deps.conn, ticket_id)["status"]
+    if snapshot.interrupts:
+        raise ValueError(f"ticket {ticket_id} is waiting for an answer")
+    if not facts.get("spec_accepted"):
+        raise ValueError(f"ticket {ticket_id} has no accepted spec to build")
+    if snapshot.next or status != TicketStatus.SPEC.value:
+        raise ValueError(
+            f"ticket {ticket_id} is {status}; only a ticket waiting at spec can continue"
+        )
+    if not deps.cfg.planner.enabled:
+        facts["plan_accepted"] = True  # no plan to accept, as scripts/live_run.py does up front
+    deps.log(ticket_id, "build_requested", "human", {})
+    # as_node="accept" makes LangGraph evaluate after_accept: plan if the planner is on, else the gate
+    graph.update_state(_thread(ticket_id), {"facts": facts}, as_node="accept")
+    return _invoke(deps, ticket_id, None, prompts_dir)
+
+
 def is_paused(state: dict[str, Any]) -> bool:
     """True when the graph stopped at an interrupt and is waiting for a human."""
     return bool(state.get("__interrupt__"))
