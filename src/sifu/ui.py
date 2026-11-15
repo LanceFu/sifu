@@ -3,16 +3,18 @@
 Run it with ``uv run --extra agents --extra ui streamlit run src/sifu/ui.py``.
 
 The app is a thin layer over ``ui_data``. Looking at a tab reads the chosen database read-only.
-Three actions write to it, each through a function that is tested without Streamlit:
+Three kinds of action write to it, each through a function that is tested without Streamlit:
 
 - a chat message (a new ticket's draft, or the spec chat on a waiting ticket) is stored and answered
   by ``brainstorm.reply_in_database``;
-- "Create" on a new ticket's draft files the reviewed draft and runs its Design stage
-  through ``demo.start_in_database``;
-- an open Design-stage request is answered through ``demo.answer_in_database``.
+- "Create" on a new ticket's draft files it with ``ops.create_ticket`` and queues its run with
+  ``jobs.submit``;
+- an answer to an open request, and "Continue to Build", are queued with ``jobs.submit``.
 
-Requests past the Design stage (plan and merge decisions) show the ``scripts/live_run.py``
-command instead, because resuming them needs the real implementer and GitHub client.
+Jobs run one at a time on a background worker, so the page stays usable; the sidebar polls the
+``jobs`` table and the page reruns when a job starts or ends. Plan and merge requests can be
+answered here when the build tools the sidebar lists are present; otherwise the app stays in
+design mode and the sidebar says what is missing.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from typing import Any
 
 import streamlit as st
 
-from sifu import brainstorm, demo, ui_data
+from sifu import brainstorm, db, demo, jobs, live, ops, ui_data
 from sifu.evidence import DATA, open_recorded
 
 DB_ENV = "SIFU_UI_DB"  # open this database first instead of the newest one in data/
@@ -72,6 +74,39 @@ def _open_timeline(ticket_id: int) -> None:
     st.session_state["view"] = "Ticket"
 
 
+def _missing() -> list[str]:
+    """What Build and merge still need on this machine, checked once per browser session."""
+    if "live_missing" not in st.session_state:
+        st.session_state["live_missing"] = live.missing_tools()
+    return st.session_state["live_missing"]
+
+
+def _recheck() -> None:
+    """Button callback: look for the build tools again on the next rerun."""
+    st.session_state.pop("live_missing", None)
+
+
+@st.fragment(run_every=3)
+def _watch_jobs(db_path: Path) -> None:
+    """Show how many jobs run and rerun the whole app when a job starts, ends or changes.
+
+    It reruns only on a change: a rerun every few seconds would disturb typing.
+    """
+    conn = open_recorded(db_path)
+    try:
+        active = ui_data.jobs(conn, active_only=True)
+    finally:
+        conn.close()
+    if active:
+        st.caption(f"{len(active)} job{'s' if len(active) != 1 else ''} running")
+    seen = tuple((j["id"], j["status"]) for j in active)
+    if "jobs_seen" not in st.session_state:
+        st.session_state["jobs_seen"] = seen
+    elif st.session_state["jobs_seen"] != seen:
+        st.session_state["jobs_seen"] = seen
+        st.rerun()
+
+
 def _drafting() -> bool:
     """Whether the new-ticket draft is open; a reloaded page reopens the chat in its URL."""
     if "intent_open" not in st.session_state:
@@ -105,6 +140,8 @@ def show_board(conn: sqlite3.Connection, db_path: Path, project_id: int | None) 
                     st.markdown(f"**#{card['id']}** {card['title']}")
                     if card["pr_url"]:
                         st.markdown(f"[PR #{card['pr_number']}]({card['pr_url']})")
+                    if card["running"]:
+                        st.caption("Running…")
                     if card["waiting"]:
                         st.caption("Waiting for you")
                     st.button(
@@ -217,14 +254,15 @@ def show_intent(conn: sqlite3.Connection, db_path: Path) -> None:
 
 
 def _start(db_path: Path, title: str, body: str, session: str | None) -> None:
-    """Create the ticket, run its Design stage and open it in the Ticket tab."""
+    """Create the ticket, queue its run and open it in the Ticket tab."""
     try:
-        with st.spinner("Running the Design stage (this calls the local models)…"):
-            ticket_id, status = demo.start_in_database(db_path, title, body, session)
+        ticket_id = ops.create_ticket(db_path, title, body, session)
+        payload = {"ticket_id": ticket_id, "live": not _missing()}
+        jobs.submit(db_path, "run", payload, ticket_id=ticket_id)
     except Exception as exc:  # shown to the person; the draft stays so nothing typed is lost
         st.error(
-            f"Could not finish the Design stage: {exc}. If a ticket was created it is on the "
-            "Board as failed; starting again creates a new one."
+            f"Could not start the ticket: {exc}. If it was created it is on the Board at "
+            "intent; starting again creates a new one."
         )
         return
     st.session_state.pop("intent_session", None)
@@ -232,7 +270,7 @@ def _start(db_path: Path, title: str, body: str, session: str | None) -> None:
     st.session_state["intent_pending"] = ("", "")
     st.session_state["intent_open"] = False
     st.session_state["goto"] = ("Ticket", ticket_id)
-    st.session_state["notice"] = f"Ticket #{ticket_id} created; status is now {status}."
+    st.session_state["notice"] = f"Ticket #{ticket_id} created; the Design stage is running."
     st.rerun()
 
 
@@ -308,11 +346,46 @@ def show_spec_chat(
             st.rerun()
 
 
+def _show_job_state(
+    conn: sqlite3.Connection, db_path: Path, ticket_id: int, active: dict[str, Any] | None
+) -> None:
+    """The ticket's running job, the reason its last run ended badly, or the way on to Build."""
+    if active:
+        st.info(f"Running: {active['kind']} (job {active['id']}, {active['status']})")
+        st.button("Refresh", key="ticket_refresh")  # a click is a rerun, which reads the table
+        if active["status"] == "queued" and st.button("Cancel", key=f"job-cancel-{active['id']}"):
+            jobs.cancel(db_path, active["id"])
+            st.rerun()
+        return
+    last = ui_data.last_job(conn, ticket_id)
+    if last and last["status"] == "failed":
+        st.error(f"The last run failed: {last['error']}")
+    elif last and last["status"] == "interrupted":
+        st.warning("The last run was cut off when the app stopped.")
+    elif ui_data.awaiting_build(conn, ticket_id):
+        missing = _missing()
+        if missing:
+            st.caption("This ticket's spec is accepted. Build needs: " + "; ".join(missing))
+        elif st.button("Continue to Build", type="primary", key="ticket_continue"):
+            _submit(db_path, "continue", {"ticket_id": ticket_id}, ticket_id)
+
+
+def _submit(db_path: Path, kind: str, payload: dict[str, Any], ticket_id: int) -> None:
+    """Queue a job; a ticket that is already running is refused with a message, not an error."""
+    try:
+        jobs.submit(db_path, kind, payload, ticket_id=ticket_id)
+    except db.JobConflict:
+        st.warning(f"Ticket #{ticket_id} is already running.")
+        return
+    st.rerun()
+
+
 def show_ticket(conn: sqlite3.Connection, db_path: Path, project_id: int | None) -> None:
     """A ticket's events, oldest first, with router decisions set apart.
 
-    A ticket waiting on a Design-stage request also gets the spec chat, and every saved chat of
-    the ticket can be read and downloaded.
+    A ticket with a job queued or running shows it (and a Cancel while it is queued) instead of
+    the spec chat; a failed or interrupted last run is explained, and a ticket whose accepted spec
+    waits at the plan gate offers "Continue to Build". Every saved chat can be read and downloaded.
     """
     cards = [c for column in ui_data.board(conn, project_id).values() for c in column]
     if not cards:
@@ -326,11 +399,13 @@ def show_ticket(conn: sqlite3.Connection, db_path: Path, project_id: int | None)
     )
     ticket = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
     st.markdown(f"Status: {status_label(ticket['status'])}")
+    active = ui_data.active_job(conn, ticket_id)
+    _show_job_state(conn, db_path, ticket_id, active)
     if by_id[ticket_id]["pr_url"]:
         st.markdown(f"[PR #{by_id[ticket_id]['pr_number']}]({by_id[ticket_id]['pr_url']})")
     with st.expander("Ticket text"):
         st.text(ticket["body"] or "(empty)")
-    if request := ui_data.design_request(conn, ticket_id):
+    if not active and (request := ui_data.design_request(conn, ticket_id)):
         show_spec_chat(conn, db_path, ticket, request)
     for chat in ui_data.chats(conn, ticket_id):
         count = len(chat["messages"])
@@ -361,31 +436,36 @@ def show_ticket(conn: sqlite3.Connection, db_path: Path, project_id: int | None)
 
 
 def _answer(db_path: Path, item: dict[str, Any], answer: str, chat: str | None = None) -> None:
-    """Answer a Design-stage request and report the ticket's new status.
+    """Queue the answer to an open request; the ticket resumes on the background worker.
 
     ``chat`` is the spec chat that led to the answer; it is written beside the ticket's artifacts
-    and logged on its timeline before the ticket resumes.
+    and logged on its timeline before the answer is queued.
     """
+    ticket_id = item["ticket_id"]
     try:
-        with st.spinner("Resuming the ticket (this calls the local models)…"):
-            if chat:
-                demo.archive_chat_in_database(
-                    db_path, item["ticket_id"], chat, "spec", f"chat-spec-{item['id']}.md"
-                )
-            status = demo.answer_in_database(db_path, item["id"], answer)
-    except Exception as exc:  # shown to the person; the request stays open
-        st.error(f"Could not resume ticket #{item['ticket_id']}: {exc}")
+        if chat:
+            demo.archive_chat_in_database(
+                db_path, ticket_id, chat, "spec", f"chat-spec-{item['id']}.md"
+            )
+        payload = {"request_id": item["id"], "answer": answer, "live": not _missing()}
+        jobs.submit(db_path, "answer", payload, ticket_id=ticket_id)
+    except db.JobConflict:
+        st.warning(f"Ticket #{ticket_id} is already running.")
         return
-    st.session_state["notice"] = f"Ticket #{item['ticket_id']} resumed; status is now {status}."
+    except Exception as exc:  # shown to the person; the request stays open
+        st.error(f"Could not send the answer for ticket #{ticket_id}: {exc}")
+        return
+    st.session_state["notice"] = f"Ticket #{ticket_id}: your answer was sent."
     st.rerun()
 
 
 def show_inbox(conn: sqlite3.Connection, db_path: Path) -> None:
-    """Open human requests. Design-stage ones are answered here; later ones by command line."""
+    """Open human requests, answered here. Build and merge ones need the build tools."""
     items = ui_data.inbox(conn)
     if not items:
         st.info("Nothing is waiting for you.")
         return
+    missing = _missing()
     for item in items:
         with st.container(border=True):
             st.markdown(
@@ -394,11 +474,17 @@ def show_inbox(conn: sqlite3.Connection, db_path: Path) -> None:
             st.markdown(item["question"])
             if item["rules"]:
                 st.caption("Rules fired: " + ", ".join(item["rules"]))
-            if item["needs_live_tools"]:
+            if ui_data.active_job(conn, item["ticket_id"]):
+                st.caption("Running…")
+                continue
+            if item["needs_live_tools"] and missing:
                 st.info(
                     "This ticket is past the Design stage. Answering continues into Build or "
-                    "the merge on GitHub, so answer it from a terminal:"
+                    "the merge on GitHub, which needs tools this machine lacks. Answer it from "
+                    "a terminal:"
                 )
+                for tool in missing:
+                    st.caption(tool)
                 st.code(
                     f"uv run python scripts/live_run.py --db {db_path} "
                     f"--answer {item['id']} approve",
@@ -408,6 +494,8 @@ def show_inbox(conn: sqlite3.Connection, db_path: Path) -> None:
             for action in item["actions"]:
                 if st.button(action, key=f"answer-{item['id']}-{action}"):
                     _answer(db_path, item, action)
+            if item["stage"] == "merge":
+                continue  # the graph closes the ticket on any merge answer but approve
             reply = st.text_input("Reply in your own words", key=f"reply-{item['id']}")
             if st.button("Send reply", key=f"send-{item['id']}") and reply.strip():
                 _answer(db_path, item, reply.strip())
@@ -427,6 +515,7 @@ def main() -> None:
     with st.sidebar:
         st.title("Sifu")
         db_path = st.selectbox("Database", choices, format_func=lambda p: p.name)
+        jobs.recover(db_path)  # jobs a dead process left behind are marked interrupted
         conn = open_recorded(db_path)
         projects = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()
         names = {p["id"]: p["name"] for p in projects}
@@ -435,6 +524,15 @@ def main() -> None:
         )
         waiting = len(ui_data.inbox(conn))
         st.caption(f"{waiting} request{'' if waiting == 1 else 's'} waiting for you")
+        missing = _missing()
+        if missing:
+            st.markdown("**Design only. Missing:**")
+            for tool in missing:
+                st.caption(tool)
+            st.button("Check again", key="live_recheck", on_click=_recheck)
+        else:
+            st.markdown("**Build and merge: ready**")
+        _watch_jobs(db_path)
     try:
         if st.session_state.get("view") not in VIEWS:
             st.session_state["view"] = VIEWS[0]
