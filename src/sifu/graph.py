@@ -191,11 +191,7 @@ class Deps:
     def check_budget(self, ticket_id: int) -> None:
         """Stop a ticket that has spent its token budget. Called before every model call."""
         with self.lock:
-            used = self.conn.execute(
-                "SELECT COALESCE(SUM(COALESCE(prompt_tokens, 0)"
-                " + COALESCE(completion_tokens, 0)), 0) FROM runs WHERE ticket_id = ?",
-                (ticket_id,),
-            ).fetchone()[0]
+            used = db.tokens_used(self.conn, ticket_id)
         limit = self.cfg.router.max_tokens_per_ticket
         if used >= limit:
             self.log(ticket_id, "budget_exceeded", "supervisor", {"used": used, "limit": limit})
@@ -1256,13 +1252,20 @@ def _result_payload(result: Any) -> dict[str, Any]:
     }
 
 
-def _thread(ticket_id: int) -> dict[str, Any]:
-    return {"configurable": {"thread_id": f"ticket-{ticket_id}"}}
+def _thread(deps: Deps, ticket_id: int) -> dict[str, Any]:
+    """The LangGraph thread of the ticket's current attempt: a reopen starts a fresh one."""
+    with deps.lock:
+        reopens = deps.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE ticket_id = ? AND kind = 'ticket_reopened'",
+            (ticket_id,),
+        ).fetchone()[0]
+    suffix = f"-r{reopens}" if reopens else ""
+    return {"configurable": {"thread_id": f"ticket-{ticket_id}{suffix}"}}
 
 
 def _invoke(deps: Deps, ticket_id: int, payload: Any, prompts_dir: Path) -> dict[str, Any]:
     try:
-        return build_graph(deps, prompts_dir).invoke(payload, _thread(ticket_id))
+        return build_graph(deps, prompts_dir).invoke(payload, _thread(deps, ticket_id))
     except Exception as exc:
         deps.log(
             ticket_id, "error", "supervisor", {"type": type(exc).__name__, "message": str(exc)}
@@ -1291,7 +1294,7 @@ def resume_ticket(
 ) -> dict[str, Any]:
     """Give a paused ticket the human's answer and continue it from its checkpoint."""
     # Without a pending interrupt LangGraph would restart the graph from empty state.
-    if not build_graph(deps, prompts_dir).get_state(_thread(ticket_id)).interrupts:
+    if not build_graph(deps, prompts_dir).get_state(_thread(deps, ticket_id)).interrupts:
         raise ValueError(f"ticket {ticket_id} has no paused checkpoint to resume")
     return _invoke(deps, ticket_id, Command(resume=answer), prompts_dir)
 
@@ -1299,7 +1302,7 @@ def resume_ticket(
 def continue_ticket(deps: Deps, ticket_id: int, prompts_dir: Path = PROMPTS_DIR) -> dict[str, Any]:
     """Continue a ticket whose accepted spec stopped at the plan gate: plan (if on), then Build."""
     graph = build_graph(deps, prompts_dir)
-    snapshot = graph.get_state(_thread(ticket_id))
+    snapshot = graph.get_state(_thread(deps, ticket_id))
     facts = dict(snapshot.values.get("facts") or {})
     status = db.get_ticket(deps.conn, ticket_id)["status"]
     if snapshot.interrupts:
@@ -1314,8 +1317,38 @@ def continue_ticket(deps: Deps, ticket_id: int, prompts_dir: Path = PROMPTS_DIR)
         facts["plan_accepted"] = True  # no plan to accept, as scripts/live_run.py does up front
     deps.log(ticket_id, "build_requested", "human", {})
     # as_node="accept" makes LangGraph evaluate after_accept: the plan if on, else the plan gate
-    graph.update_state(_thread(ticket_id), {"facts": facts}, as_node="accept")
+    graph.update_state(_thread(deps, ticket_id), {"facts": facts}, as_node="accept")
     return _invoke(deps, ticket_id, None, prompts_dir)
+
+
+def reopen_ticket(
+    deps: Deps,
+    ticket_id: int,
+    facts: dict[str, bool] | None = None,
+    prompts_dir: Path = PROMPTS_DIR,
+) -> dict[str, Any]:
+    """Run a failed ticket again from the start on a fresh thread, with a fresh token budget.
+
+    A ticket with a pull request cannot be reopened. The old worktree is discarded.
+    """
+    status = db.get_ticket(deps.conn, ticket_id)["status"]
+    if status != TicketStatus.FAILED.value:
+        raise ValueError(f"ticket {ticket_id} is {status}, not failed")
+    with deps.lock:
+        has_pr = deps.conn.execute(
+            "SELECT 1 FROM events WHERE ticket_id = ? AND kind IN ('pr_opened', 'draft_pr_opened')",
+            (ticket_id,),
+        ).fetchone()
+    if has_pr:
+        raise ValueError(f"ticket {ticket_id} has a pull request; create a new ticket instead")
+    discard = getattr(deps.implementer, "discard", None)
+    if discard is not None:
+        discard(ticket_id)
+    with deps.lock:
+        runs_before = deps.conn.execute("SELECT COALESCE(MAX(id), 0) FROM runs").fetchone()[0]
+    deps.move(ticket_id, TicketStatus.INTENT)
+    deps.log(ticket_id, "ticket_reopened", "human", {"runs_before": runs_before})
+    return run_ticket(deps, ticket_id, facts, prompts_dir)
 
 
 def is_paused(state: dict[str, Any]) -> bool:

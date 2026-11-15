@@ -160,6 +160,22 @@ def create_worktree(
     return path, branch
 
 
+def remove_worktree(
+    repo: Path, worktrees_dir: Path, ticket_id: int, tag: str | None = None
+) -> bool:
+    """Remove the ticket's worktree and its branch; False when there was no worktree."""
+    name = f"ticket-{ticket_id}" + (f"-{tag}" if tag else "")
+    path = worktrees_dir / name
+    if not path.exists():
+        return False
+    git_output(repo, "worktree", "remove", "--force", str(path))
+    try:
+        git_output(repo, "branch", "-D", f"sifu/{name}")
+    except Exception:  # noqa: BLE001 - the branch may already be gone; the worktree is what matters
+        pass
+    return True
+
+
 def changed_files(worktree: Path) -> list[str]:
     """Paths modified, added or untracked in the worktree, relative to its root."""
     files = []
@@ -264,4 +280,13 @@ class Implementer:
             self.runner,
             tag=self.tag,
             resume=session_id if feedback else None,
+        )
+
+    def discard(self, ticket_id: int) -> bool:
+        """Remove the ticket's worktree and branch so a reopened ticket starts clean."""
+        return remove_worktree(
+            Path(self.cfg.workspace.product_repo_path).expanduser(),
+            Path(self.cfg.workspace.worktrees_dir).expanduser(),
+            ticket_id,
+            self.tag,
         )
