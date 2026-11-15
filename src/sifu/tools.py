@@ -43,10 +43,10 @@ def build_server(
 
     @server.tool
     def get_ticket(ticket_id: int) -> dict[str, Any]:
-        """Return a ticket's id, title, body and status."""
+        """Return a ticket's id, title, body, status and creation time."""
         with guard:
             row = db.get_ticket(conn, ticket_id)
-        return {k: row[k] for k in ("id", "title", "body", "status")}
+        return {k: row[k] for k in ("id", "title", "body", "status", "created_at")}
 
     @server.tool
     def list_glossary_terms() -> dict[str, Any]:
