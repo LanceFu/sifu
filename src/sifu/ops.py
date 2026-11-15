@@ -9,12 +9,12 @@ import re
 from pathlib import Path
 from typing import Any
 
-from sifu import db, demo, lessons_pr, settings
+from sifu import db, demo, lessons_pr, settings, ui_data
 from sifu import live as live_wiring
 from sifu.config import Config, load_config
-from sifu.evidence import DATA
+from sifu.evidence import DATA, open_recorded
 from sifu.graph import Deps, continue_ticket, reopen_ticket, resume_interrupted, run_ticket
-from sifu.implementer import git_output
+from sifu.implementer import git_output, remove_worktree
 from sifu.lessons_pr import Lesson
 from sifu.llm import LLM
 
@@ -97,6 +97,62 @@ def send_lessons(
         project="TripPlanner",
     )
     return str(out["pr_url"])
+
+
+FINISHED = ("done", "failed")
+
+
+def stale_worktrees(db_path: str | Path, *, cfg: Config | None = None) -> list[dict[str, Any]]:
+    """Done or failed tickets whose worktree is still on disk, inside the worktrees folder."""
+    cfg = effective_config(db_path, cfg)
+    conn = open_recorded(db_path)
+    try:
+        found = []
+        rows = conn.execute(
+            "SELECT id, title, status FROM tickets WHERE status IN ('done', 'failed') ORDER BY id"
+        ).fetchall()
+        for row in rows:
+            path = safe_worktree(ui_data.worktree_of(conn, row["id"]), cfg)
+            if path is not None:
+                found.append(
+                    {
+                        "ticket_id": row["id"],
+                        "title": row["title"],
+                        "status": row["status"],
+                        "worktree": str(path),
+                    }
+                )
+        return found
+    finally:
+        conn.close()
+
+
+def remove_ticket_worktree(
+    db_path: str | Path, ticket_id: int, *, cfg: Config | None = None
+) -> bool:
+    """Remove a finished ticket's worktree and branch and log it; False when none was left."""
+    cfg = effective_config(db_path, cfg)
+    conn = db.connect(db_path)
+    try:
+        status = db.get_ticket(conn, ticket_id)["status"]
+        if status not in FINISHED:
+            raise ValueError(
+                f"ticket {ticket_id} is {status}; only a done or failed ticket's work is removed"
+            )
+        path = safe_worktree(ui_data.worktree_of(conn, ticket_id), cfg)
+        if path is None:
+            return False
+        removed = remove_worktree(
+            Path(cfg.workspace.product_repo_path).expanduser(),
+            Path(cfg.workspace.worktrees_dir).expanduser().resolve(),
+            ticket_id,
+            live_wiring.tag_for(db_path),
+        )
+        if removed:
+            db.append_event(conn, ticket_id, "worktree_removed", "human", {"worktree": str(path)})
+        return removed
+    finally:
+        conn.close()
 
 
 def effective_config(db_path: str | Path, cfg: Config | None = None) -> Config:

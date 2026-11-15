@@ -648,6 +648,22 @@ def show_settings(conn: sqlite3.Connection, db_path: Path) -> None:
     st.markdown("**Configuration (read-only)**")
     st.json(cfg.model_dump(), expanded=False)
     _show_lessons(db_path, cfg)
+    st.markdown("**Cleanup**")
+    stale = ops.stale_worktrees(db_path)
+    if not stale:
+        st.caption("No worktrees of finished tickets.")
+    for item in stale:
+        label, button = st.columns([5, 1])
+        label.markdown(
+            f"#{item['ticket_id']} {item['title']} · {item['status']} · `{item['worktree']}`"
+        )
+        if button.button("Remove", key=f"wt-remove-{item['ticket_id']}"):
+            try:
+                ops.remove_ticket_worktree(db_path, item["ticket_id"])
+            except Exception as exc:
+                st.error(str(exc))
+            else:
+                st.rerun()
     st.markdown("**New database**")
     name = st.text_input("Name", key="db_name", help="Lowercase letters, digits and hyphens.")
     if st.button("Create database", key="db_create"):

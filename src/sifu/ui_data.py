@@ -35,6 +35,7 @@ KEY_KINDS = frozenset(
         "design_round_cap",
         "build_requested",
         "build_retried",
+        "worktree_removed",
         "run_resumed",
         "ticket_reopened",
         "merge_retried",

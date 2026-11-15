@@ -666,3 +666,16 @@ def test_lessons_are_previewed_then_sent_as_a_job(database, monkeypatch, no_real
     [(kind, payload, ticket_id)] = no_real_work
     assert kind == "lessons" and ticket_id is None
     assert payload["lessons"][0]["lesson"] == "(ticket 4) Trim names."
+
+
+def test_a_finished_tickets_worktree_can_be_removed_from_settings(database, monkeypatch):
+    removed = []
+    entry = {"ticket_id": 2, "title": "Done one", "status": "done", "worktree": "/wt/ticket-2"}
+    monkeypatch.setattr(ops, "stale_worktrees", lambda path, cfg=None: [entry])
+    monkeypatch.setattr(
+        ops, "remove_ticket_worktree", lambda path, ticket, cfg=None: removed.append(ticket) or True
+    )
+    at = run("Settings")
+    assert "/wt/ticket-2" in text(at)
+    at.button(key="wt-remove-2").click().run()
+    assert removed == [2]

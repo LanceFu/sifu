@@ -8,6 +8,8 @@ import pytest
 pytest.importorskip("langgraph")
 
 from sifu import db, demo, live, ops, settings  # noqa: E402
+from sifu.implementer import create_worktree  # noqa: E402
+from sifu.models import TicketStatus  # noqa: E402
 from tests.fakes import FakeLLM  # noqa: E402
 
 BODY = "Given a Traveller saves a Trip, When the name is blank, Then nameBlank is thrown."
@@ -207,3 +209,60 @@ def test_send_lessons_needs_at_least_one_lesson(home, cfg):
         ops.send_lessons(home, [{"lesson": "  ", "evidence": ""}], cfg=cfg)
     with pytest.raises(ValueError, match="no lessons to send"):
         ops.preview_lessons(home, [], cfg=cfg)
+
+
+@pytest.fixture()
+def wt_home(tmp_path, cfg):
+    """A database with a done ticket and a build ticket, each with a real worktree on disk."""
+    repo = tmp_path / "product"
+    repo.mkdir()
+    for args in (
+        ("init", "-q", "-b", "main"),
+        ("config", "user.email", "t@example.com"),
+        ("config", "user.name", "t"),
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "README.md").write_text("hi\n")
+    for args in (("add", "-A"), ("commit", "-q", "-m", "init")):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    cfg.workspace.product_repo_path = str(repo)
+    cfg.workspace.worktrees_dir = str(tmp_path / "wt")
+    path = tmp_path / "cleanup.db"
+    conn = db.connect(path)
+    db.init_db(conn)
+    project = db.create_project(conn, "TripPlanner", str(repo), "o/r")
+    gates = {"spec_accepted": True, "plan_accepted": True, "has_diff": True}
+    gates |= {"ci_green": True, "review_passed": True}
+    ids = []
+    for title in ("finished", "running"):
+        ticket = db.create_ticket(conn, project, title)
+        worktree, _ = create_worktree(repo, tmp_path / "wt", ticket, "cleanup")
+        db.append_event(
+            conn, ticket, "implementer_result", "implementer", {"worktree": str(worktree)}
+        )
+        for status in (TicketStatus.SPEC, TicketStatus.BUILD):
+            db.set_status(conn, ticket, status, gates)
+        ids.append(ticket)
+    for status in (TicketStatus.TEST, TicketStatus.DONE):
+        db.set_status(conn, ids[0], status, gates)
+    conn.close()
+    return path, ids[0], ids[1]
+
+
+def test_only_finished_tickets_with_a_worktree_on_disk_are_listed(wt_home, cfg):
+    path, done, building = wt_home
+    assert [w["ticket_id"] for w in ops.stale_worktrees(path, cfg=cfg)] == [done]
+
+
+def test_removing_a_finished_tickets_worktree_deletes_it_and_logs_it(wt_home, cfg):
+    path, done, building = wt_home
+    assert ops.remove_ticket_worktree(path, done, cfg=cfg) is True
+    assert ops.stale_worktrees(path, cfg=cfg) == []
+    assert "worktree_removed" in [e["kind"] for e in db.list_events(db.connect(path), done)]
+    assert ops.remove_ticket_worktree(path, done, cfg=cfg) is False
+
+
+def test_a_running_tickets_worktree_is_never_removed(wt_home, cfg):
+    path, done, building = wt_home
+    with pytest.raises(ValueError, match="is build"):
+        ops.remove_ticket_worktree(path, building, cfg=cfg)
