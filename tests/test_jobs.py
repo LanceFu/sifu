@@ -146,4 +146,10 @@ def test_the_job_payload_is_stored_as_given(path, monkeypatch):
 
 
 def test_reopen_and_resume_are_job_kinds():
-    assert set(jobs.HANDLERS) == {"run", "answer", "continue", "reopen", "resume"}
+    assert {"run", "answer", "continue", "reopen", "resume"} <= set(jobs.HANDLERS)
+
+
+def test_send_lessons_is_a_job_kind():
+    from sifu import ops
+
+    assert jobs.HANDLERS["lessons"] is ops.send_lessons

@@ -5,7 +5,19 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from sifu import brainstorm, db, demo, jobs, live, ops, ui  # noqa: E402
+from sifu import (  # noqa: E402
+    brainstorm,
+    db,
+    demo,
+    jobs,
+    lessons,
+    live,
+    ops,
+    preflight,
+    settings,
+    ui,
+    ui_data,
+)
 from sifu.models import (  # noqa: E402
     DecisionResult,
     DecisionType,
@@ -518,3 +530,152 @@ def test_resume_is_submitted_when_the_tools_are_there(database, monkeypatch, no_
     ready(monkeypatch)
     open_ticket(1).button(key="ticket_resume").click().run()
     assert no_real_work == [("resume", {"ticket_id": 1, "live": True}, 1)]
+
+
+def test_settings_shows_each_option_with_the_config_files_value(database):
+    at = run("Settings")
+    assert at.selectbox(key="opt-router.merge_mode").value == "risk_based"
+    assert at.toggle(key="opt-critic.enabled").value is False
+
+
+def test_changing_an_option_saves_it_for_this_database(database):
+    at = run("Settings")
+    at.selectbox(key="opt-router.merge_mode").set_value("manual").run()
+    assert not at.exception, at.exception
+    assert settings.load(database) == {"router.merge_mode": "manual"}
+    assert run("Settings").selectbox(key="opt-router.merge_mode").value == "manual"
+
+
+def test_settings_runs_the_setup_checks_on_demand_and_shows_each_result(database, monkeypatch):
+    results = [
+        preflight.Check("Ollama", True, "reachable", "design"),
+        preflight.Check("GitHub token", False, "No GitHub token found.", "build"),
+    ]
+    calls = []
+    monkeypatch.setattr(preflight, "run_checks", lambda cfg, **kw: calls.append(1) or results)
+    at = run("Settings")
+    assert calls == []  # opening the tab does not run them
+    at.button(key="checks_run").click().run()
+    page = text(at)
+    assert calls == [1] and "Ollama" in page and "No GitHub token found." in page
+
+
+def test_a_new_database_is_created_and_selected(database, monkeypatch, tmp_path):
+    made = tmp_path / "trial.db"
+
+    def create(name):
+        conn = db.connect(made)
+        db.init_db(conn)
+        conn.close()
+        return made
+
+    monkeypatch.setattr(ops, "create_database", create)
+    monkeypatch.setattr(ui_data, "list_databases", lambda data_dir: [made])
+    at = run("Settings")
+    at.text_input(key="db_name").set_value("trial").run()
+    at.button(key="db_create").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["db"] == made
+    assert "Created trial.db." in [s.value for s in at.success]
+
+
+def test_the_ticket_tab_lists_the_tickets_files_and_shows_the_chosen_one(
+    database, monkeypatch, tmp_path
+):
+    folder = tmp_path / "1"
+    folder.mkdir()
+    (folder / "intent.md").write_text("# Intent: Rename a Trip")
+    (folder / "spec.md").write_text("# Spec: Rename a Trip\nAC-1 renames it.")
+    monkeypatch.setattr(demo, "artifacts_dir", lambda path, cfg=None: tmp_path)
+    at = run("Ticket")
+    pick = at.selectbox(key="file_pick")
+    assert pick.options == ["intent.md", "spec.md"]
+    pick.set_value("spec.md").run()
+    assert "AC-1 renames it." in text(at)
+
+
+def test_the_ticket_tab_shows_token_use_against_the_budget(database):
+    conn = db.connect(database)
+    db.record_run(conn, "reviewer", "m", 1, 1000, 500)
+    conn.close()
+    page = text(run("Ticket"))
+    assert "1,500 of" in page and "model tokens" in page
+
+
+def test_a_plan_request_gets_a_chat_with_the_plan_beside_it(
+    database, monkeypatch, tmp_path, no_real_work
+):
+    conn = db.connect(database)
+    ticket = db.create_ticket(conn, 1, "Reorder Stops", "As a Traveller I reorder Stops.")
+    result = DecisionResult(floor_tier=RiskTier.HUMAN, final_tier=RiskTier.HUMAN, rules_fired=["x"])
+    decision = db.record_decision(conn, ticket, DecisionType.ACCEPT_PLAN, result, [])
+    db.set_status(conn, ticket, TicketStatus.NEEDS_HUMAN)
+    request = db.open_human_request(
+        conn, ticket, "Approve this plan?", ["approve", "close"], decision
+    )
+    conn.close()
+    (tmp_path / str(ticket)).mkdir()
+    (tmp_path / str(ticket) / "plan.md").write_text("# Plan\nStep 1: reorder in DayPlan.swift")
+    monkeypatch.setattr(demo, "artifacts_dir", lambda path, cfg=None: tmp_path)
+    calls = []
+    monkeypatch.setattr(brainstorm, "reply_in_database", fake_reply(calls, draft="Keep Stop ids."))
+    ready(monkeypatch)
+    at = open_ticket(ticket)
+    assert "Step 1: reorder in DayPlan.swift" in text(at)
+    at.chat_input(key=f"spec-input-ticket-{ticket}-request-{request}").set_value("Why?").run()
+    assert (calls[0]["stage"], "DayPlan.swift" in calls[0]["document"]) == ("plan", True)
+
+
+def test_a_plan_request_without_build_tools_shows_what_is_missing_instead_of_buttons(
+    database, monkeypatch, tmp_path
+):
+    conn = db.connect(database)
+    ticket = db.create_ticket(conn, 1, "Reorder Stops")
+    result = DecisionResult(floor_tier=RiskTier.HUMAN, final_tier=RiskTier.HUMAN, rules_fired=["x"])
+    decision = db.record_decision(conn, ticket, DecisionType.ACCEPT_PLAN, result, [])
+    db.set_status(conn, ticket, TicketStatus.NEEDS_HUMAN)
+    request = db.open_human_request(
+        conn, ticket, "Approve this plan?", ["approve", "close"], decision
+    )
+    conn.close()
+    monkeypatch.setattr(demo, "artifacts_dir", lambda path, cfg=None: tmp_path)
+    at = open_ticket(ticket)
+    assert not [b for b in at.button if b.key == f"spec-answer-{request}-approve"]
+    assert "Answering needs: No GitHub token found." in text(at)
+
+
+def test_lessons_are_previewed_then_sent_as_a_job(database, monkeypatch, no_real_work):
+    monkeypatch.setattr(lessons, "pending", lambda approved, proposed: ["(ticket 4) Trim names."])
+    monkeypatch.setattr(
+        ops,
+        "preview_lessons",
+        lambda path, rows, cfg=None: {
+            "diff": "+- Trim names.",
+            "tier": "HUMAN",
+            "rules": ["touches_protected_path"],
+            "added": ["Trim names."],
+            "skipped": [],
+            "pr_url": None,
+        },
+    )
+    ready(monkeypatch)
+    at = run("Settings")
+    at.button(key="lessons_preview").click().run()
+    assert "+- Trim names." in text(at) and "touches_protected_path" in text(at)
+    at.button(key="lessons_send").click().run()
+    [(kind, payload, ticket_id)] = no_real_work
+    assert kind == "lessons" and ticket_id is None
+    assert payload["lessons"][0]["lesson"] == "(ticket 4) Trim names."
+
+
+def test_a_finished_tickets_worktree_can_be_removed_from_settings(database, monkeypatch):
+    removed = []
+    entry = {"ticket_id": 2, "title": "Done one", "status": "done", "worktree": "/wt/ticket-2"}
+    monkeypatch.setattr(ops, "stale_worktrees", lambda path, cfg=None: [entry])
+    monkeypatch.setattr(
+        ops, "remove_ticket_worktree", lambda path, ticket, cfg=None: removed.append(ticket) or True
+    )
+    at = run("Settings")
+    assert "/wt/ticket-2" in text(at)
+    at.button(key="wt-remove-2").click().run()
+    assert removed == [2]

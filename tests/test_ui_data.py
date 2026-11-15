@@ -211,7 +211,7 @@ def test_a_saved_chat_is_a_key_event_on_the_timeline(conn, project):
     assert (row["summary"], row["detail"]) == ("intent chat, 4 messages", ["/a/chat.md"])
 
 
-def test_design_request_is_the_open_request_the_ui_can_answer(conn, project):
+def test_chat_request_is_the_open_request_a_person_can_talk_through(conn, project):
     spec = db.create_ticket(conn, project, "Rename a Trip")
     db.open_human_request(conn, spec, "Approve?", ["approve", "close"], decide(conn, spec))
     merge = db.create_ticket(conn, project, "Limit a Day Plan")
@@ -219,9 +219,25 @@ def test_design_request_is_the_open_request_the_ui_can_answer(conn, project):
         conn, merge, "Merge?", ["approve", "close"], decide(conn, merge, DecisionType.MERGE)
     )
     idle = db.create_ticket(conn, project, "Remove a Stop")
-    assert ui_data.design_request(conn, spec)["question"] == "Approve?"
-    assert ui_data.design_request(conn, merge) is None
-    assert ui_data.design_request(conn, idle) is None
+    assert ui_data.chat_request(conn, spec)["question"] == "Approve?"
+    assert ui_data.chat_request(conn, merge) is None
+    assert ui_data.chat_request(conn, idle) is None
+    plan = db.create_ticket(conn, project, "Reorder Stops")
+    db.open_human_request(
+        conn,
+        plan,
+        "Approve plan?",
+        ["approve", "close"],
+        decide(conn, plan, DecisionType.ACCEPT_PLAN),
+    )
+    assert ui_data.chat_request(conn, plan)["chat_stage"] == "plan"
+    assert ui_data.chat_request(conn, spec)["chat_stage"] == "spec"
+
+
+def test_a_stuck_build_request_is_not_a_chat_request(conn, project):
+    stuck = db.create_ticket(conn, project, "Rename a Trip")
+    db.open_human_request(conn, stuck, "Build stopped", ["retry", "retry with a note", "close"])
+    assert ui_data.chat_request(conn, stuck) is None
 
 
 def test_jobs_are_read_newest_first_and_the_active_one_is_found(conn, project):
@@ -294,3 +310,26 @@ def test_a_stuck_build_request_offers_retry_and_close_and_takes_a_note(conn, pro
     [item] = ui_data.inbox(conn)
     assert item["actions"] == ["retry", "close"] and item["takes_note"] is True
     assert item["needs_live_tools"] is True
+
+
+def test_artifact_files_lists_markdown_files_in_the_folder_only(tmp_path):
+    folder = tmp_path / "ticket"
+    folder.mkdir()
+    (folder / "spec.md").write_text("s")
+    (folder / "intent.md").write_text("i")
+    (folder / "notes.txt").write_text("n")
+    (folder / "sub").mkdir()
+    (folder / "sub" / "deep.md").write_text("d")
+    outside = tmp_path / "secret.md"
+    outside.write_text("x")
+    (folder / "link.md").symlink_to(outside)
+    assert [p.name for p in ui_data.artifact_files(folder)] == ["intent.md", "spec.md"]
+    assert ui_data.artifact_files(folder / "missing") == []
+
+
+def test_worktree_of_is_the_last_implementer_runs_worktree(conn, project):
+    tid = db.create_ticket(conn, project, "Rename a Trip")
+    assert ui_data.worktree_of(conn, tid) is None
+    db.append_event(conn, tid, "implementer_result", "implementer", {"worktree": "/wt/ticket-1"})
+    db.append_event(conn, tid, "implementer_result", "implementer", {"worktree": "/wt/ticket-1-b"})
+    assert ui_data.worktree_of(conn, tid) == "/wt/ticket-1-b"

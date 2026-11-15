@@ -1,12 +1,15 @@
 """The app's writes, by database path: create, run, answer and continue a ticket."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("langgraph")
 
-from sifu import db, demo, live, ops  # noqa: E402
+from sifu import db, demo, live, ops, settings  # noqa: E402
+from sifu.implementer import create_worktree  # noqa: E402
+from sifu.models import TicketStatus  # noqa: E402
 from tests.fakes import FakeLLM  # noqa: E402
 
 BODY = "Given a Traveller saves a Trip, When the name is blank, Then nameBlank is thrown."
@@ -119,3 +122,147 @@ def test_resume_refuses_a_ticket_with_nothing_to_resume(home, cfg):
     ops.run(home, ticket, live=False, cfg=cfg, llm=FakeLLM())
     with pytest.raises(ValueError, match="nothing to resume"):
         ops.resume(home, ticket, live=False, cfg=cfg, llm=FakeLLM())
+
+
+def test_runs_use_the_databases_saved_options(home, cfg):
+    cfg.router.merge_mode = "risk_based"
+    seed = db.connect(home)
+    db.init_db(seed)
+    seed.close()
+    settings.save(home, "router.merge_mode", "manual")
+    assert ops.effective_config(home, cfg).router.merge_mode == "manual"
+    deps = ops.open_deps(home, live=False, cfg=cfg, llm=FakeLLM())
+    assert deps.cfg.router.merge_mode == "manual" and deps.cfg.planner.enabled is False
+    deps.conn.close()
+
+
+def test_create_database_makes_an_initialised_file_with_the_project(tmp_path, cfg):
+    path = ops.create_database("trial-2", data_dir=tmp_path, cfg=cfg)
+    assert path == tmp_path / "trial-2.db"
+    conn = db.connect(path)
+    assert [r["name"] for r in conn.execute("SELECT name FROM projects")] == ["TripPlanner"]
+    assert db.list_jobs(conn) == []  # every table exists
+
+
+@pytest.mark.parametrize("name", ["", "Trial", "a/b", "../x", "a.db", "-a", "a" * 41, "a b"])
+def test_create_database_refuses_a_bad_name(tmp_path, cfg, name):
+    with pytest.raises(ValueError):
+        ops.create_database(name, data_dir=tmp_path, cfg=cfg)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_create_database_never_overwrites(tmp_path, cfg):
+    ops.create_database("trial", data_dir=tmp_path, cfg=cfg)
+    before = (tmp_path / "trial.db").read_bytes()
+    with pytest.raises(FileExistsError):
+        ops.create_database("trial", data_dir=tmp_path, cfg=cfg)
+    assert (tmp_path / "trial.db").read_bytes() == before
+
+
+def test_safe_worktree_accepts_only_an_existing_folder_inside_the_worktrees_dir(tmp_path, cfg):
+    cfg.workspace.worktrees_dir = str(tmp_path / "wt")
+    inside = tmp_path / "wt" / "ticket-1"
+    inside.mkdir(parents=True)
+    assert ops.safe_worktree(str(inside), cfg) == inside.resolve()
+    assert ops.safe_worktree(str(tmp_path / "wt" / "gone"), cfg) is None
+    assert ops.safe_worktree(str(tmp_path), cfg) is None
+    assert ops.safe_worktree(str(inside / ".." / ".." / "elsewhere"), cfg) is None
+    assert ops.safe_worktree(None, cfg) is None
+    assert ops.safe_worktree(str(tmp_path / "wt"), cfg) is None  # the folder itself is not one
+
+
+def test_a_worktree_reached_through_a_symlink_out_of_the_folder_is_refused(tmp_path, cfg):
+    cfg.workspace.worktrees_dir = str(tmp_path / "wt")
+    (tmp_path / "wt").mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "wt" / "ticket-9").symlink_to(elsewhere)
+    assert ops.safe_worktree(str(tmp_path / "wt" / "ticket-9"), cfg) is None
+
+
+def test_worktree_diff_shows_changes_and_new_files_and_is_capped(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+
+    def git(*a):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-q")
+    (repo / "a.txt").write_text("one\n")
+    git("add", ".")
+    git("commit", "-qm", "first")
+    (repo / "a.txt").write_text("two\n")
+    (repo / "new.txt").write_text("x" * 50)
+    diff = ops.worktree_diff(repo)
+    assert "-one" in diff and "+two" in diff and "new.txt" in diff
+    capped = ops.worktree_diff(repo, limit=40)
+    assert len(capped) < 200 and capped.endswith("(diff cut at 40 characters)")
+
+
+def test_send_lessons_needs_at_least_one_lesson(home, cfg):
+    with pytest.raises(ValueError, match="no lessons to send"):
+        ops.send_lessons(home, [{"lesson": "  ", "evidence": ""}], cfg=cfg)
+    with pytest.raises(ValueError, match="no lessons to send"):
+        ops.preview_lessons(home, [], cfg=cfg)
+
+
+@pytest.fixture()
+def wt_home(tmp_path, cfg):
+    """A database with a done ticket and a build ticket, each with a real worktree on disk."""
+    repo = tmp_path / "product"
+    repo.mkdir()
+    for args in (
+        ("init", "-q", "-b", "main"),
+        ("config", "user.email", "t@example.com"),
+        ("config", "user.name", "t"),
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "README.md").write_text("hi\n")
+    for args in (("add", "-A"), ("commit", "-q", "-m", "init")):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    cfg.workspace.product_repo_path = str(repo)
+    cfg.workspace.worktrees_dir = str(tmp_path / "wt")
+    path = tmp_path / "cleanup.db"
+    conn = db.connect(path)
+    db.init_db(conn)
+    project = db.create_project(conn, "TripPlanner", str(repo), "o/r")
+    gates = {"spec_accepted": True, "plan_accepted": True, "has_diff": True}
+    gates |= {"ci_green": True, "review_passed": True}
+    ids = []
+    for title in ("finished", "running"):
+        ticket = db.create_ticket(conn, project, title)
+        worktree, _ = create_worktree(repo, tmp_path / "wt", ticket, "cleanup")
+        db.append_event(
+            conn, ticket, "implementer_result", "implementer", {"worktree": str(worktree)}
+        )
+        for status in (TicketStatus.SPEC, TicketStatus.BUILD):
+            db.set_status(conn, ticket, status, gates)
+        ids.append(ticket)
+    for status in (TicketStatus.TEST, TicketStatus.DONE):
+        db.set_status(conn, ids[0], status, gates)
+    conn.close()
+    return path, ids[0], ids[1]
+
+
+def test_only_finished_tickets_with_a_worktree_on_disk_are_listed(wt_home, cfg):
+    path, done, building = wt_home
+    assert [w["ticket_id"] for w in ops.stale_worktrees(path, cfg=cfg)] == [done]
+
+
+def test_removing_a_finished_tickets_worktree_deletes_it_and_logs_it(wt_home, cfg):
+    path, done, building = wt_home
+    assert ops.remove_ticket_worktree(path, done, cfg=cfg) is True
+    assert ops.stale_worktrees(path, cfg=cfg) == []
+    assert "worktree_removed" in [e["kind"] for e in db.list_events(db.connect(path), done)]
+    assert ops.remove_ticket_worktree(path, done, cfg=cfg) is False
+
+
+def test_a_running_tickets_worktree_is_never_removed(wt_home, cfg):
+    path, done, building = wt_home
+    with pytest.raises(ValueError, match="is build"):
+        ops.remove_ticket_worktree(path, building, cfg=cfg)

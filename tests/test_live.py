@@ -7,8 +7,8 @@ pytest.importorskip("langgraph")
 from pydantic import SecretStr  # noqa: E402
 
 from sifu import live  # noqa: E402
-from sifu.credentials import SecretNotFound  # noqa: E402
 from sifu.implementer import Implementer  # noqa: E402
+from sifu.preflight import Check  # noqa: E402
 from sifu.verify import Verifier  # noqa: E402
 from tests.fakes import FakeLLM  # noqa: E402
 
@@ -27,10 +27,9 @@ def product(tmp_path, cfg):
 
 @pytest.fixture()
 def tools(monkeypatch):
-    """Every tool present: a token, a GitHub client and `claude` on PATH."""
+    """A token and a GitHub client, as open_live needs them."""
     monkeypatch.setattr(live, "get_github_token", lambda github_cfg: SecretStr("t0ken"))
     monkeypatch.setattr(live.GitHubClient, "from_config", classmethod(lambda cls, c: "github"))
-    monkeypatch.setattr(live.shutil, "which", lambda name: f"/usr/bin/{name}")
 
 
 def test_open_live_wires_the_implementer_verifier_and_github(tmp_path, cfg, product, tools):
@@ -56,18 +55,23 @@ def test_the_default_database_is_not_tagged():
     assert live.tag_for(live.DEFAULT_DB) is None and live.tag_for("/x/data/design.db") == "design"
 
 
-def test_missing_tools_is_empty_when_everything_is_there(cfg, product, tools):
+def test_missing_tools_is_empty_when_every_build_check_passes(cfg, monkeypatch):
+    checks = [
+        Check("Ollama", False, "not reachable", "design"),  # a design check never blocks Build
+        Check("Claude Code", True, "found", "build"),
+    ]
+    monkeypatch.setattr(live, "run_checks", lambda cfg: checks)
     assert live.missing_tools(cfg) == []
 
 
-def test_missing_tools_names_each_missing_tool_and_never_the_token(cfg, tmp_path, monkeypatch):
-    cfg.workspace.product_repo_path = str(tmp_path / "nowhere")
-
-    def no_token(github_cfg):
-        raise SecretNotFound("No GitHub token found.")
-
-    monkeypatch.setattr(live, "get_github_token", no_token)
-    monkeypatch.setattr(live.shutil, "which", lambda name: None)
-    missing = live.missing_tools(cfg)
-    assert len(missing) == 3
-    assert "claude" in missing[0] and "nowhere" in missing[1] and "token" in missing[2].lower()
+def test_missing_tools_lists_each_failed_build_check_as_name_and_detail(cfg, monkeypatch):
+    checks = [
+        Check("Claude Code", False, "no `claude` on PATH", "build"),
+        Check("GitHub token", False, "No GitHub token found.", "build"),
+        Check("Clean clone", True, "clean", "build"),
+    ]
+    monkeypatch.setattr(live, "run_checks", lambda cfg: checks)
+    assert live.missing_tools(cfg) == [
+        "Claude Code: no `claude` on PATH",
+        "GitHub token: No GitHub token found.",
+    ]

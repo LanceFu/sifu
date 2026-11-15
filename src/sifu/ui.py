@@ -29,11 +29,11 @@ from typing import Any
 
 import streamlit as st
 
-from sifu import brainstorm, db, demo, jobs, live, ops, ui_data
+from sifu import brainstorm, db, demo, jobs, lessons, live, ops, preflight, settings, ui_data
 from sifu.evidence import DATA, open_recorded
 
 DB_ENV = "SIFU_UI_DB"  # open this database first instead of the newest one in data/
-VIEWS = ("Board", "Ticket", "Inbox")
+VIEWS = ("Board", "Ticket", "Inbox", "Settings")
 CHAT_PARAM = "chat"  # the open intent chat's session id, kept in the URL so a reload keeps it
 _SESSION = re.compile(r"[0-9a-f]{32}")
 # A vertical rule between the chat and the preview; Streamlit only has a horizontal divider.
@@ -276,17 +276,21 @@ def _start(db_path: Path, title: str, body: str, session: str | None) -> None:
 
 
 def _request_document(db_path: Path, ticket: sqlite3.Row, request: dict[str, Any]) -> str:
-    """What a spec chat is about: the spec the router stopped, when there is one on disk."""
-    if request["stage"] != "accept_spec":
-        return ""  # a questions request carries the questions in its own text
-    path = demo.artifacts_dir(db_path) / str(ticket["id"]) / "spec.md"
-    return path.read_text(encoding="utf-8") if path.is_file() else ""
+    """What a request chat is about: the plan and spec the router stopped, when on disk."""
+    wanted = {"accept_spec": ["spec.md"], "accept_plan": ["plan.md", "spec.md"]}
+    folder = demo.artifacts_dir(db_path) / str(ticket["id"])
+    parts = []
+    for name in wanted.get(request["stage"], []):  # a questions request has its own text
+        path = folder / name
+        if path.is_file() and not path.is_symlink():
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n\n".join(parts)
 
 
-def show_spec_chat(
+def show_request_chat(
     conn: sqlite3.Connection, db_path: Path, ticket: sqlite3.Row, request: dict[str, Any]
 ) -> None:
-    """A waiting Design-stage request: the document, a chat about it and the answer to send."""
+    """A waiting spec or plan request: the document, a chat about it and the answer to send."""
     session = f"ticket-{ticket['id']}-request-{request['id']}"
     note_key = f"spec-note-{request['id']}"
     if (pending := st.session_state.pop(f"{note_key}-pending", None)) is not None:
@@ -314,15 +318,19 @@ def show_spec_chat(
             help="Answers or a revision note. It is added to the ticket and the spec is rewritten.",
         )
         chat = session if messages else None
-        slots = st.columns(len(request["actions"]) + 1)
-        for slot, action in zip(slots, request["actions"], strict=False):
-            if slot.button(action, key=f"spec-answer-{request['id']}-{action}"):
-                _answer(db_path, request, action, chat)
-        send = slots[-1].button(
-            "Send reply", key=f"spec-send-{request['id']}", disabled=not note.strip()
-        )
-        if send:
-            _answer(db_path, request, note.strip(), chat)
+        missing = _missing() if request["needs_live_tools"] else []
+        if missing:
+            st.caption("Answering needs: " + "; ".join(missing))
+        else:
+            slots = st.columns(len(request["actions"]) + 1)
+            for slot, action in zip(slots, request["actions"], strict=False):
+                if slot.button(action, key=f"spec-answer-{request['id']}-{action}"):
+                    _answer(db_path, request, action, chat)
+            send = slots[-1].button(
+                "Send reply", key=f"spec-send-{request['id']}", disabled=not note.strip()
+            )
+            if send:
+                _answer(db_path, request, note.strip(), chat)
     if prompt:
         document = "\n\n".join(
             part
@@ -336,7 +344,7 @@ def show_spec_chat(
         turn = _chat_turn(
             db_path,
             session,
-            "spec",
+            request["chat_stage"],
             prompt,
             draft=note,
             document=document,
@@ -419,8 +427,24 @@ def show_ticket(conn: sqlite3.Connection, db_path: Path, project_id: int | None)
         st.markdown(f"[PR #{by_id[ticket_id]['pr_number']}]({by_id[ticket_id]['pr_url']})")
     with st.expander("Ticket text"):
         st.text(ticket["body"] or "(empty)")
-    if not active and (request := ui_data.design_request(conn, ticket_id)):
-        show_spec_chat(conn, db_path, ticket, request)
+    cfg = ops.effective_config(db_path)
+    used, limit = db.tokens_used(conn, ticket_id), cfg.router.max_tokens_per_ticket
+    st.progress(min(used / limit, 1.0) if limit else 1.0)
+    st.caption(f"{used:,} of {limit:,} model tokens")
+    files = ui_data.artifact_files(demo.artifacts_dir(db_path) / str(ticket_id))
+    if files:
+        with st.expander("Files"):
+            names = [p.name for p in files]
+            name = st.selectbox("File", names, key="file_pick")
+            content = next(p for p in files if p.name == name).read_text(encoding="utf-8")
+            st.code(content, language="markdown", wrap_lines=True)
+            st.download_button("Download", content, file_name=name, key="file_download")
+    worktree = ops.safe_worktree(ui_data.worktree_of(conn, ticket_id), cfg)
+    if worktree is not None:
+        with st.expander("Diff"):
+            st.code(ops.worktree_diff(worktree), language="diff")
+    if not active and (request := ui_data.chat_request(conn, ticket_id)):
+        show_request_chat(conn, db_path, ticket, request)
     for chat in ui_data.chats(conn, ticket_id):
         count = len(chat["messages"])
         with st.expander(f"Chat log: {chat['stage']} ({count} messages)"):
@@ -458,8 +482,9 @@ def _answer(db_path: Path, item: dict[str, Any], answer: str, chat: str | None =
     ticket_id = item["ticket_id"]
     try:
         if chat:
+            stage = item.get("chat_stage", "spec")
             demo.archive_chat_in_database(
-                db_path, ticket_id, chat, "spec", f"chat-spec-{item['id']}.md"
+                db_path, ticket_id, chat, stage, f"chat-{stage}-{item['id']}.md"
             )
         payload = {"request_id": item["id"], "answer": answer, "live": not _missing()}
         jobs.submit(db_path, "answer", payload, ticket_id=ticket_id)
@@ -522,6 +547,136 @@ def show_inbox(conn: sqlite3.Connection, db_path: Path) -> None:
                 _answer(db_path, item, reply.strip())
 
 
+def _save_option(db_path: Path, key: str) -> None:
+    """Widget callback: save the option's new value for this database."""
+    settings.save(db_path, key, st.session_state[f"opt-{key}"])
+
+
+def _reset_options(db_path: Path) -> None:
+    """Button callback: every run option goes back to the value in config.yaml."""
+    for key in settings.OPTIONS:
+        settings.clear(db_path, key)
+        st.session_state.pop(f"opt-{key}", None)
+
+
+def _run_checks(db_path: Path) -> None:
+    """Button callback: run the setup checks and refresh the sidebar's build-tools line."""
+    st.session_state["checks"] = preflight.run_checks(ops.effective_config(db_path))
+    st.session_state.pop("live_missing", None)
+
+
+def _show_lessons(db_path: Path, cfg: Any) -> None:
+    """Lessons waiting for conventions.md: edit, preview the change, open its pull request."""
+    st.markdown("**Lessons**")
+    st.caption(
+        "Lessons go to conventions.md through a pull request that a person merges; "
+        "Sifu never merges it."
+    )
+    approved = Path(cfg.workspace.product_repo_path).expanduser() / "conventions.md"
+    proposed = demo.artifacts_dir(db_path) / "conventions.proposed.md"
+    rows = [{"lesson": text, "evidence": ""} for text in lessons.pending(approved, proposed)]
+    edited = st.data_editor(
+        rows or [{"lesson": "", "evidence": ""}],
+        key="lessons_editor",
+        num_rows="dynamic",
+        column_config={"lesson": "Lesson", "evidence": "Evidence (for the pull request)"},
+    )
+    to_send = [dict(r) for r in edited.to_dict("records")] if hasattr(edited, "to_dict") else edited
+    to_send = [
+        {"lesson": r.get("lesson") or "", "evidence": r.get("evidence") or ""} for r in to_send
+    ]
+    preview, send = st.columns(2)
+    if preview.button("Preview", key="lessons_preview"):
+        try:
+            with st.spinner("Preparing the change…"):
+                st.session_state["lessons_result"] = ops.preview_lessons(db_path, to_send)
+        except Exception as exc:  # shown to the person; nothing is left behind
+            st.session_state.pop("lessons_result", None)
+            st.error(str(exc))
+    if result := st.session_state.get("lessons_result"):
+        st.code(result["diff"], language="diff")
+        st.caption(f"Router: tier {result['tier']}; rules fired: {', '.join(result['rules'])}")
+        for lesson in result["skipped"]:
+            st.caption(f"Already in conventions.md: {lesson}")
+    missing = _missing()
+    if missing:
+        st.caption("Opening the pull request needs: " + "; ".join(missing))
+    if send.button("Open pull request", key="lessons_send", disabled=bool(missing)):
+        try:
+            jobs.submit(db_path, "lessons", {"lessons": to_send})
+        except Exception as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.pop("lessons_result", None)
+            st.session_state["notice"] = "The lessons pull request is being opened."
+            st.rerun()
+
+
+def show_settings(conn: sqlite3.Connection, db_path: Path) -> None:
+    """Setup checks, run options and the read-only configuration; writes only in callbacks."""
+    cfg = ops.effective_config(db_path)
+    st.markdown("**Setup checks**")
+    st.button("Run checks", key="checks_run", on_click=_run_checks, args=(db_path,))
+    for check in st.session_state.get("checks", []):
+        badge = ":green-badge[ok]" if check.ok else ":red-badge[missing]"
+        st.markdown(f"{badge} **{check.name}** — {check.detail}")
+        if check.needed_for == "build":
+            st.caption("needed for Build")
+    st.markdown("**Run options**")
+    st.caption(
+        "These apply to this database only and override config.yaml. "
+        "Risk floor rules apply in every mode."
+    )
+    for key, allowed in settings.OPTIONS.items():
+        section, field = key.split(".")
+        current = getattr(getattr(cfg, section), field)
+        widget_key = f"opt-{key}"
+        if isinstance(allowed[0], bool):
+            st.toggle(
+                key, value=current, key=widget_key, on_change=_save_option, args=(db_path, key)
+            )
+        else:
+            st.selectbox(
+                key,
+                list(allowed),
+                index=list(allowed).index(current),
+                key=widget_key,
+                on_change=_save_option,
+                args=(db_path, key),
+            )
+    st.button("Use config.yaml values", key="opt-reset", on_click=_reset_options, args=(db_path,))
+    st.markdown("**Configuration (read-only)**")
+    st.json(cfg.model_dump(), expanded=False)
+    _show_lessons(db_path, cfg)
+    st.markdown("**Cleanup**")
+    stale = ops.stale_worktrees(db_path)
+    if not stale:
+        st.caption("No worktrees of finished tickets.")
+    for item in stale:
+        label, button = st.columns([5, 1])
+        label.markdown(
+            f"#{item['ticket_id']} {item['title']} · {item['status']} · `{item['worktree']}`"
+        )
+        if button.button("Remove", key=f"wt-remove-{item['ticket_id']}"):
+            try:
+                ops.remove_ticket_worktree(db_path, item["ticket_id"])
+            except Exception as exc:
+                st.error(str(exc))
+            else:
+                st.rerun()
+    st.markdown("**New database**")
+    name = st.text_input("Name", key="db_name", help="Lowercase letters, digits and hyphens.")
+    if st.button("Create database", key="db_create"):
+        try:
+            path = ops.create_database(name)
+        except (ValueError, FileExistsError) as exc:
+            st.error(str(exc))
+        else:
+            st.session_state["db_pending"] = path
+            st.session_state["notice"] = f"Created {path.name}."
+            st.rerun()
+
+
 def main() -> None:
     """Lay out the sidebar and one tab per view; only the open tab's content is built."""
     st.set_page_config(page_title="Sifu", layout="wide")
@@ -535,7 +690,9 @@ def main() -> None:
         st.session_state["view"], st.session_state["ticket"] = goto
     with st.sidebar:
         st.title("Sifu")
-        db_path = st.selectbox("Database", choices, format_func=lambda p: p.name)
+        if (pending := st.session_state.pop("db_pending", None)) is not None:
+            st.session_state["db"] = pending  # a new database is selected on the next run
+        db_path = st.selectbox("Database", choices, format_func=lambda p: p.name, key="db")
         jobs.recover(db_path)  # jobs a dead process left behind are marked interrupted
         conn = open_recorded(db_path)
         projects = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()
@@ -561,7 +718,7 @@ def main() -> None:
         # tab (the board's Details button sets it) and .open is true for that tab alone.
         if notice := st.session_state.pop("notice", None):
             st.success(notice)
-        board, ticket, inbox = st.tabs(VIEWS, key="view", on_change="rerun")
+        board, ticket, inbox, setup = st.tabs(VIEWS, key="view", on_change="rerun")
         if board.open:
             with board:
                 show_board(conn, db_path, project_id)
@@ -571,6 +728,9 @@ def main() -> None:
         if inbox.open:
             with inbox:
                 show_inbox(conn, db_path)
+        if setup.open:
+            with setup:
+                show_settings(conn, db_path)
     finally:
         conn.close()
 

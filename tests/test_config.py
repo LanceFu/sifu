@@ -58,3 +58,8 @@ def test_readme_lists_every_config_option():
             if f"`{section}.{name}`" not in readme
         ]
     assert missing == []
+
+
+def test_the_streamlit_server_listens_on_localhost_only():
+    text = (ROOT / ".streamlit" / "config.toml").read_text()
+    assert 'address = "localhost"' in text

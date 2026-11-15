@@ -35,6 +35,7 @@ KEY_KINDS = frozenset(
         "design_round_cap",
         "build_requested",
         "build_retried",
+        "worktree_removed",
         "run_resumed",
         "ticket_reopened",
         "merge_retried",
@@ -301,6 +302,25 @@ def inbox(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return items
 
 
+def artifact_files(folder: Path) -> list[Path]:
+    """The Markdown files directly in a ticket's artifacts folder; symlinks are left out."""
+    if not folder.is_dir():
+        return []
+    return sorted(
+        p for p in folder.iterdir() if p.suffix == ".md" and p.is_file() and not p.is_symlink()
+    )
+
+
+def worktree_of(conn: sqlite3.Connection, ticket_id: int) -> str | None:
+    """The worktree of the ticket's newest implementer run, if it recorded one."""
+    row = conn.execute(
+        "SELECT payload FROM events WHERE ticket_id = ? AND kind = 'implementer_result'"
+        " ORDER BY id DESC LIMIT 1",
+        (ticket_id,),
+    ).fetchone()
+    return (json.loads(row["payload"] or "{}").get("worktree") or None) if row else None
+
+
 def can_reopen(conn: sqlite3.Connection, ticket_id: int) -> bool:
     """True for a failed ticket that never opened a pull request."""
     ticket = conn.execute("SELECT status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
@@ -313,11 +333,24 @@ def can_reopen(conn: sqlite3.Connection, ticket_id: int) -> bool:
     return has_pr is None
 
 
-def design_request(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:
-    """The ticket's open request if it can be answered in the UI (a Design-stage one), else None."""
+CHAT_DECISIONS = {
+    None: "spec",
+    DecisionType.ACCEPT_SPEC.value: "spec",
+    DecisionType.ACCEPT_PLAN.value: "plan",
+}
+
+
+def chat_request(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:
+    """The ticket's open request when a person can talk it through before answering.
+
+    That is a questions request, a spec decision or a plan decision; the item's ``chat_stage``
+    says which chat. A merge decision and a stuck build or merge (retry or close) have none.
+    """
     for item in inbox(conn):
-        if item["ticket_id"] == ticket_id and not item["needs_live_tools"]:
-            return item
+        if item["ticket_id"] != ticket_id or "retry" in item["options"]:
+            continue
+        if item["stage"] in CHAT_DECISIONS:
+            return {**item, "chat_stage": CHAT_DECISIONS[item["stage"]]}
     return None
 
 

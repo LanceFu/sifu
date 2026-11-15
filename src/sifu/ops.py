@@ -5,13 +5,160 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import Any
 
-from sifu import db, demo
+from sifu import db, demo, lessons_pr, settings, ui_data
 from sifu import live as live_wiring
 from sifu.config import Config, load_config
+from sifu.evidence import DATA, open_recorded
 from sifu.graph import Deps, continue_ticket, reopen_ticket, resume_interrupted, run_ticket
+from sifu.implementer import git_output, remove_worktree
+from sifu.lessons_pr import Lesson
 from sifu.llm import LLM
+
+DATABASE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+
+
+def create_database(name: str, *, data_dir: Path | None = None, cfg: Config | None = None) -> Path:
+    """Create ``<data_dir>/<name>.db`` with every table and the TripPlanner project.
+
+    ``ValueError`` for a name that is not lowercase letters, digits and hyphens (at most 40);
+    ``FileExistsError`` when the file exists. Nothing is created or overwritten on an error.
+    """
+    if not DATABASE_NAME.fullmatch(name):
+        raise ValueError(
+            "a database name is lowercase letters, digits and hyphens, 1 to 40 characters, "
+            "starting with a letter or digit"
+        )
+    path = (data_dir or DATA) / f"{name}.db"
+    if path.exists():
+        raise FileExistsError(f"{path.name} already exists")
+    cfg = cfg or load_config(live_wiring.ROOT / "config.yaml")
+    conn = db.connect(path)
+    try:
+        db.init_db(conn)
+        repo = str(Path(cfg.workspace.product_repo_path).expanduser())
+        db.get_or_create_project(conn, "TripPlanner", repo, cfg.github.repo)
+    finally:
+        conn.close()
+    return path
+
+
+def safe_worktree(worktree: str | None, cfg: Config) -> Path | None:
+    """The worktree as a resolved path, only when it is a folder strictly inside worktrees_dir."""
+    if not worktree:
+        return None
+    root = Path(cfg.workspace.worktrees_dir).expanduser().resolve()
+    path = Path(worktree).resolve()
+    if path == root or not path.is_dir() or not path.is_relative_to(root):
+        return None
+    return path
+
+
+def worktree_diff(worktree: Path, limit: int = 200_000) -> str:
+    """The worktree's changes against HEAD and its untracked files, cut at ``limit`` characters."""
+    text = git_output(worktree, "diff", "HEAD")
+    untracked = git_output(worktree, "ls-files", "--others", "--exclude-standard").split()
+    if untracked:
+        text += "\nUntracked files:\n" + "\n".join(untracked) + "\n"
+    if len(text) > limit:
+        text = text[:limit] + f"\n(diff cut at {limit} characters)"
+    return text
+
+
+def _lessons(rows: list[dict[str, str]]) -> list[Lesson]:
+    """Lesson objects from editor rows; blank rows are dropped, and an empty result is refused."""
+    lessons = [Lesson(**row) for row in rows if str(row.get("lesson", "")).strip()]
+    if not lessons:
+        raise ValueError("no lessons to send")
+    return lessons
+
+
+def preview_lessons(
+    db_path: str | Path, lessons: list[dict[str, str]], *, cfg: Config | None = None
+) -> dict[str, Any]:
+    """Dry run: the conventions.md diff and the router's decision; nothing is pushed."""
+    return lessons_pr.run(
+        effective_config(db_path, cfg), _lessons(lessons), push=False, project="TripPlanner"
+    )
+
+
+def send_lessons(
+    db_path: str | Path, lessons: list[dict[str, str]], *, cfg: Config | None = None
+) -> str:
+    """Open the pull request that adds the lessons to conventions.md; return its URL."""
+    out = lessons_pr.run(
+        effective_config(db_path, cfg),
+        _lessons(lessons),
+        push=True,
+        db_path=db_path,
+        project="TripPlanner",
+    )
+    return str(out["pr_url"])
+
+
+FINISHED = ("done", "failed")
+
+
+def stale_worktrees(db_path: str | Path, *, cfg: Config | None = None) -> list[dict[str, Any]]:
+    """Done or failed tickets whose worktree is still on disk, inside the worktrees folder."""
+    cfg = effective_config(db_path, cfg)
+    conn = open_recorded(db_path)
+    try:
+        found = []
+        rows = conn.execute(
+            "SELECT id, title, status FROM tickets WHERE status IN ('done', 'failed') ORDER BY id"
+        ).fetchall()
+        for row in rows:
+            path = safe_worktree(ui_data.worktree_of(conn, row["id"]), cfg)
+            if path is not None:
+                found.append(
+                    {
+                        "ticket_id": row["id"],
+                        "title": row["title"],
+                        "status": row["status"],
+                        "worktree": str(path),
+                    }
+                )
+        return found
+    finally:
+        conn.close()
+
+
+def remove_ticket_worktree(
+    db_path: str | Path, ticket_id: int, *, cfg: Config | None = None
+) -> bool:
+    """Remove a finished ticket's worktree and branch and log it; False when none was left."""
+    cfg = effective_config(db_path, cfg)
+    conn = db.connect(db_path)
+    try:
+        status = db.get_ticket(conn, ticket_id)["status"]
+        if status not in FINISHED:
+            raise ValueError(
+                f"ticket {ticket_id} is {status}; only a done or failed ticket's work is removed"
+            )
+        path = safe_worktree(ui_data.worktree_of(conn, ticket_id), cfg)
+        if path is None:
+            return False
+        removed = remove_worktree(
+            Path(cfg.workspace.product_repo_path).expanduser(),
+            Path(cfg.workspace.worktrees_dir).expanduser().resolve(),
+            ticket_id,
+            live_wiring.tag_for(db_path),
+        )
+        if removed:
+            db.append_event(conn, ticket_id, "worktree_removed", "human", {"worktree": str(path)})
+        return removed
+    finally:
+        conn.close()
+
+
+def effective_config(db_path: str | Path, cfg: Config | None = None) -> Config:
+    """The config with this database's saved run options applied (a copy)."""
+    cfg = cfg or load_config(live_wiring.ROOT / "config.yaml")
+    return settings.apply(cfg, settings.load(db_path))
 
 
 def open_deps(
@@ -22,9 +169,9 @@ def open_deps(
     Design mode copies the config and switches the planner off, so an accepted spec stops at the
     plan gate instead of running the stub Build.
     """
+    cfg = effective_config(db_path, cfg)
     if live:
         return live_wiring.open_live(db_path, cfg=cfg, llm=llm)[0]
-    cfg = (cfg or load_config(demo.ROOT / "config.yaml")).model_copy(deep=True)
     cfg.planner.enabled = False
     return demo.open_demo(cfg, llm, str(db_path))[0]
 

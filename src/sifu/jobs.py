@@ -25,6 +25,7 @@ HANDLERS: dict[str, Callable[..., str]] = {
     "continue": ops.continue_to_build,
     "reopen": ops.reopen,
     "resume": ops.resume,
+    "lessons": ops.send_lessons,
 }
 
 

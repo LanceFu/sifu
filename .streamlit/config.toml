@@ -1,0 +1,7 @@
+# The app can start builds and merge pull requests, and it has no login.
+# Keep it reachable from this machine only.
+[server]
+address = "localhost"
+
+[browser]
+gatherUsageStats = false
