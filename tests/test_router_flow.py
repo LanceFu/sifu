@@ -8,8 +8,11 @@ pytest.importorskip("langgraph")
 
 from sifu import db  # noqa: E402
 from sifu.graph import (  # noqa: E402
+    _thread,
+    build_graph,
     is_paused,
     reopen_ticket,
+    resume_interrupted,
     resume_ticket,
     run_ticket,
     sqlite_checkpointer,
@@ -367,3 +370,34 @@ def test_reopening_discards_the_old_worktree(conn, make_ticket, make_deps):
     ticket = failed_ticket(deps, conn, make_ticket)
     reopen_ticket(deps, ticket)
     assert discarded == [ticket]
+
+
+def test_a_run_cut_off_before_build_is_resumed_from_its_checkpoint(conn, make_ticket, make_deps):
+    deps = make_deps(FakeLLM())
+    ticket = make_ticket("T", BODY)
+    # stop the graph just before Build, as a killed process would leave it
+    build_graph(deps).invoke(
+        {"ticket_id": ticket, "facts": {"plan_accepted": True}},
+        _thread(deps, ticket),
+        interrupt_before=["build"],
+    )
+    assert status(conn, ticket) == "spec"
+    state = resume_interrupted(deps, ticket)
+    assert state["status"] == "done" and status(conn, ticket) == "done"
+    kinds = [e["kind"] for e in db.list_events(conn, ticket)]
+    assert kinds.count("design_started") == 1 and "run_resumed" in kinds  # not restarted
+
+
+def test_resume_refuses_a_ticket_waiting_for_an_answer_or_with_nothing_left(
+    conn, make_ticket, make_deps
+):
+    deps = make_deps(FakeLLM())
+    waiting = make_ticket("T", PROTECTED_BODY)
+    run_ticket(deps, waiting)
+    with pytest.raises(ValueError, match="waiting for an answer"):
+        resume_interrupted(deps, waiting)
+    finished = make_ticket("T2", BODY)
+    run_ticket(deps, finished)
+    with pytest.raises(ValueError, match="nothing to resume"):
+        resume_interrupted(deps, finished)
+    assert len(db.open_requests(conn)) == 1  # nothing ran

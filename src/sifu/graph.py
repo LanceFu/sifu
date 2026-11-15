@@ -1351,6 +1351,20 @@ def reopen_ticket(
     return run_ticket(deps, ticket_id, facts, prompts_dir)
 
 
+def resume_interrupted(
+    deps: Deps, ticket_id: int, prompts_dir: Path = PROMPTS_DIR
+) -> dict[str, Any]:
+    """Continue a run that was cut off mid-graph (the app stopped) from its last checkpoint."""
+    graph = build_graph(deps, prompts_dir)
+    snapshot = graph.get_state(_thread(deps, ticket_id))
+    if snapshot.interrupts:
+        raise ValueError(f"ticket {ticket_id} is waiting for an answer, not cut off")
+    if not snapshot.next:
+        raise ValueError(f"ticket {ticket_id} has nothing to resume")
+    deps.log(ticket_id, "run_resumed", "human", {"next": list(snapshot.next)})
+    return _invoke(deps, ticket_id, None, prompts_dir)
+
+
 def is_paused(state: dict[str, Any]) -> bool:
     """True when the graph stopped at an interrupt and is waiting for a human."""
     return bool(state.get("__interrupt__"))
