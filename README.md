@@ -15,7 +15,7 @@ Course project for Agentic AI (University of Waterloo). The target product is th
 | Planner, headless Claude Code implementer, verify loop, GitHub PR and merge flow | Done; run live on `tripplanner-ios` (PRs #2 to #5) |
 | LLM critic pass | Done; off by default (`critic.enabled`) |
 | Evaluation (golden tickets against a single-prompt baseline, golden diffs for the critics) | Done; results in the notebook |
-| Streamlit UI (board with new-ticket chat, ticket timeline with spec chat, inbox) | Done; see Streamlit UI |
+| Streamlit UI: draft, run, build, merge, recover and operate from the app (board, ticket, inbox, settings) | Done; see Streamlit UI |
 
 ## Setup
 
@@ -298,17 +298,24 @@ without it; report them side by side.
 
 ## Streamlit UI
 
+The app is the main way to run Sifu: from a draft to a merged pull request, and everything around
+it.
+
 ```bash
 uv run --extra agents --extra ui streamlit run src/sifu/ui.py
 ```
 
-Pick a database from `data/` in the sidebar (set `SIFU_UI_DB` to open one first). Looking at a
-tab only reads the database; sending a chat message, starting a ticket and answering a request
-write to it. The sidebar says **Build and merge: ready** when `claude`, the product clone and the
-GitHub token are all found; otherwise it says **Design only** and lists what is missing, and the
-app stops at the Design stage as before. Create, every answer and "Continue to Build" are queued
-and run one at a time in the background, so the page stays usable; it refreshes itself when a
-job starts or ends. Run only one Streamlit server per database. There are three tabs:
+Run it from the repo root so `.streamlit/config.toml` is picked up. The server listens on
+`localhost` only and has **no login**: it can start builds and merge pull requests, so do not
+expose it. Run only one Streamlit server per database.
+
+**Sidebar.** Pick a database from `data/` (set `SIFU_UI_DB` to open one first) and a project. The
+build-tools line says **Build and merge: ready** when the setup checks for Build all pass;
+otherwise it says **Design only** and lists what is missing, and the app stops at the Design stage.
+Looking at a tab only reads the database; sending a chat message, starting a ticket, answering a
+request and changing a setting write to it. Create, every answer and "Continue to Build" are queued
+and run one at a time in the background, so the page stays usable; it refreshes itself when a job
+starts or ends.
 
 - **Board:** tickets by status, each with its pull request link. "New ticket" swaps the board for
   a draft: the chat is on the left, where you talk the change through with the model
@@ -320,27 +327,33 @@ job starts or ends. Run only one Streamlit server per database. There are three 
   is rendered from the draft, then the reviewers write a spec or questions. A low-risk spec is
   accepted by the router; anything else stops for you. With the build tools present a low-risk
   ticket then runs on to the merge decision under `router.merge_mode` and `planner.enabled`
-  from `config.yaml`; in design mode an accepted spec waits before Build. A card shows
-  "Running…" while the ticket has a job.
+  (this database's run options, else `config.yaml`); in design mode an accepted spec waits before
+  Build. A card shows "Running…" while the ticket has a job.
 - **Ticket:** one ticket's timeline. Router decisions show the floor and final tier, the rules
   that fired and each assessor's rationale. "Key events only" hides tool calls and status changes.
-  A ticket stopped at a Design-stage request also shows the spec (or the questions) beside a
-  second chat, and a reply box the chat drafts for you: `approve`, `close` or send the reply,
-  which is added to the ticket and the Design stage runs again (up to `router.max_design_rounds`).
-  It also shows the running job (and Cancel while it is queued), why the last run failed, and
-  "Continue to Build" for a ticket whose spec was accepted in design mode.
-- **Inbox:** open human requests, answered there (`approve`, `close`, or a typed reply except at
-  a merge decision). The ticket resumes from its checkpoint in the background. A plan or merge
-  decision needs the build tools; without them it shows what is missing and the
+  Above it: the status and running job (with Cancel while it is queued), why the last run failed,
+  and **Continue to Build**, **Reopen** or **Resume** where they apply; token use against
+  `router.max_tokens_per_ticket`; a **Files** view of `intent.md`, `spec.md`, `plan.md` and the
+  chat logs, with download; and a **Diff** of the ticket's worktree. A ticket stopped at a spec or
+  plan decision (or at questions) also shows the document beside a second chat and a reply box the
+  chat drafts for you: `approve`, `close` or send the reply, which is added to the ticket and the
+  stage runs again (up to `router.max_design_rounds`).
+- **Inbox:** open human requests, answered there (`approve`, `close`, `retry`, or a typed reply
+  except at a merge or retry request). The ticket resumes from its checkpoint in the background. A
+  plan or merge decision needs the build tools; without them the app shows what is missing and the
   `scripts/live_run.py --answer` command instead.
+- **Settings:** *Setup checks* (Ollama, the models, the product repo, Claude Code, the GitHub
+  token, a clean clone, the verify tools and the worktrees folder; the app shows whether a token
+  exists, never its value, and has no field to enter one). *Run options* for this database only:
+  `router.merge_mode`, `planner.enabled`, `critic.enabled` and `implementer.backend`; models, caps
+  and protected paths stay in `config.yaml` and are shown read-only, and risk floor rules apply in
+  every mode. *Lessons* waiting for `conventions.md`: edit them, preview the change and the router's
+  decision, then open the pull request as a job (Sifu never merges it). *Cleanup* of the worktrees
+  and branches of done or failed tickets. *New database*: a name of lowercase letters, digits and
+  hyphens, created in `data/` and selected.
 
-When something stops, the app has a button for it. A build that gave up (verify or the critics ran
-out of rounds, or made no progress) and a merge blocked by a red check each open a request with
-`retry` and `close`; a stuck build also takes `retry with a note`, and the note reaches the
-implementer as a finding. A retry after a draft pull request updates that same pull request and takes
-it out of draft once the checks pass. **Reopen** on a failed ticket runs it again from the Design
-stage with its token budget starting again; it is not offered once the ticket has a pull request.
-**Resume** continues a run that was cut off when the app stopped, in the mode it started in.
+`scripts/live_run.py` and `scripts/lessons_pr.py` remain as command-line equivalents of the app's
+run and lessons features. The evaluation and probe scripts are terminal-only.
 
 Chats are kept. Every message is stored in the `chat_messages` table as it is sent, with the
 draft as it stood after each reply. When a ticket starts, its intent chat is linked to it and
