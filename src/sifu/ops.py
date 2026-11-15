@@ -7,11 +7,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sifu import db, demo
+from sifu import db, demo, settings
 from sifu import live as live_wiring
 from sifu.config import Config, load_config
 from sifu.graph import Deps, continue_ticket, reopen_ticket, resume_interrupted, run_ticket
 from sifu.llm import LLM
+
+
+def effective_config(db_path: str | Path, cfg: Config | None = None) -> Config:
+    """The config with this database's saved run options applied (a copy)."""
+    cfg = cfg or load_config(live_wiring.ROOT / "config.yaml")
+    return settings.apply(cfg, settings.load(db_path))
 
 
 def open_deps(
@@ -22,9 +28,9 @@ def open_deps(
     Design mode copies the config and switches the planner off, so an accepted spec stops at the
     plan gate instead of running the stub Build.
     """
+    cfg = effective_config(db_path, cfg)
     if live:
         return live_wiring.open_live(db_path, cfg=cfg, llm=llm)[0]
-    cfg = (cfg or load_config(demo.ROOT / "config.yaml")).model_copy(deep=True)
     cfg.planner.enabled = False
     return demo.open_demo(cfg, llm, str(db_path))[0]
 

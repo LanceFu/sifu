@@ -29,11 +29,11 @@ from typing import Any
 
 import streamlit as st
 
-from sifu import brainstorm, db, demo, jobs, live, ops, ui_data
+from sifu import brainstorm, db, demo, jobs, live, ops, settings, ui_data
 from sifu.evidence import DATA, open_recorded
 
 DB_ENV = "SIFU_UI_DB"  # open this database first instead of the newest one in data/
-VIEWS = ("Board", "Ticket", "Inbox")
+VIEWS = ("Board", "Ticket", "Inbox", "Settings")
 CHAT_PARAM = "chat"  # the open intent chat's session id, kept in the URL so a reload keeps it
 _SESSION = re.compile(r"[0-9a-f]{32}")
 # A vertical rule between the chat and the preview; Streamlit only has a horizontal divider.
@@ -522,6 +522,48 @@ def show_inbox(conn: sqlite3.Connection, db_path: Path) -> None:
                 _answer(db_path, item, reply.strip())
 
 
+def _save_option(db_path: Path, key: str) -> None:
+    """Widget callback: save the option's new value for this database."""
+    settings.save(db_path, key, st.session_state[f"opt-{key}"])
+
+
+def _reset_options(db_path: Path) -> None:
+    """Button callback: every run option goes back to the value in config.yaml."""
+    for key in settings.OPTIONS:
+        settings.clear(db_path, key)
+        st.session_state.pop(f"opt-{key}", None)
+
+
+def show_settings(conn: sqlite3.Connection, db_path: Path) -> None:
+    """Run options and the read-only configuration. Saving happens in callbacks only."""
+    cfg = ops.effective_config(db_path)
+    st.markdown("**Run options**")
+    st.caption(
+        "These apply to this database only and override config.yaml. "
+        "Risk floor rules apply in every mode."
+    )
+    for key, allowed in settings.OPTIONS.items():
+        section, field = key.split(".")
+        current = getattr(getattr(cfg, section), field)
+        widget_key = f"opt-{key}"
+        if isinstance(allowed[0], bool):
+            st.toggle(
+                key, value=current, key=widget_key, on_change=_save_option, args=(db_path, key)
+            )
+        else:
+            st.selectbox(
+                key,
+                list(allowed),
+                index=list(allowed).index(current),
+                key=widget_key,
+                on_change=_save_option,
+                args=(db_path, key),
+            )
+    st.button("Use config.yaml values", key="opt-reset", on_click=_reset_options, args=(db_path,))
+    st.markdown("**Configuration (read-only)**")
+    st.json(cfg.model_dump(), expanded=False)
+
+
 def main() -> None:
     """Lay out the sidebar and one tab per view; only the open tab's content is built."""
     st.set_page_config(page_title="Sifu", layout="wide")
@@ -561,7 +603,7 @@ def main() -> None:
         # tab (the board's Details button sets it) and .open is true for that tab alone.
         if notice := st.session_state.pop("notice", None):
             st.success(notice)
-        board, ticket, inbox = st.tabs(VIEWS, key="view", on_change="rerun")
+        board, ticket, inbox, setup = st.tabs(VIEWS, key="view", on_change="rerun")
         if board.open:
             with board:
                 show_board(conn, db_path, project_id)
@@ -571,6 +613,9 @@ def main() -> None:
         if inbox.open:
             with inbox:
                 show_inbox(conn, db_path)
+        if setup.open:
+            with setup:
+                show_settings(conn, db_path)
     finally:
         conn.close()
 

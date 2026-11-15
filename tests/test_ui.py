@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from sifu import brainstorm, db, demo, jobs, live, ops, ui  # noqa: E402
+from sifu import brainstorm, db, demo, jobs, live, ops, settings, ui  # noqa: E402
 from sifu.models import (  # noqa: E402
     DecisionResult,
     DecisionType,
@@ -518,3 +518,17 @@ def test_resume_is_submitted_when_the_tools_are_there(database, monkeypatch, no_
     ready(monkeypatch)
     open_ticket(1).button(key="ticket_resume").click().run()
     assert no_real_work == [("resume", {"ticket_id": 1, "live": True}, 1)]
+
+
+def test_settings_shows_each_option_with_the_config_files_value(database):
+    at = run("Settings")
+    assert at.selectbox(key="opt-router.merge_mode").value == "risk_based"
+    assert at.toggle(key="opt-critic.enabled").value is False
+
+
+def test_changing_an_option_saves_it_for_this_database(database):
+    at = run("Settings")
+    at.selectbox(key="opt-router.merge_mode").set_value("manual").run()
+    assert not at.exception, at.exception
+    assert settings.load(database) == {"router.merge_mode": "manual"}
+    assert run("Settings").selectbox(key="opt-router.merge_mode").value == "manual"

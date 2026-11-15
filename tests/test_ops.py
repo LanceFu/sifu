@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("langgraph")
 
-from sifu import db, demo, live, ops  # noqa: E402
+from sifu import db, demo, live, ops, settings  # noqa: E402
 from tests.fakes import FakeLLM  # noqa: E402
 
 BODY = "Given a Traveller saves a Trip, When the name is blank, Then nameBlank is thrown."
@@ -119,3 +119,15 @@ def test_resume_refuses_a_ticket_with_nothing_to_resume(home, cfg):
     ops.run(home, ticket, live=False, cfg=cfg, llm=FakeLLM())
     with pytest.raises(ValueError, match="nothing to resume"):
         ops.resume(home, ticket, live=False, cfg=cfg, llm=FakeLLM())
+
+
+def test_runs_use_the_databases_saved_options(home, cfg):
+    cfg.router.merge_mode = "risk_based"
+    seed = db.connect(home)
+    db.init_db(seed)
+    seed.close()
+    settings.save(home, "router.merge_mode", "manual")
+    assert ops.effective_config(home, cfg).router.merge_mode == "manual"
+    deps = ops.open_deps(home, live=False, cfg=cfg, llm=FakeLLM())
+    assert deps.cfg.router.merge_mode == "manual" and deps.cfg.planner.enabled is False
+    deps.conn.close()
