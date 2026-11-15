@@ -301,6 +301,25 @@ def inbox(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return items
 
 
+def artifact_files(folder: Path) -> list[Path]:
+    """The Markdown files directly in a ticket's artifacts folder; symlinks are left out."""
+    if not folder.is_dir():
+        return []
+    return sorted(
+        p for p in folder.iterdir() if p.suffix == ".md" and p.is_file() and not p.is_symlink()
+    )
+
+
+def worktree_of(conn: sqlite3.Connection, ticket_id: int) -> str | None:
+    """The worktree of the ticket's newest implementer run, if it recorded one."""
+    row = conn.execute(
+        "SELECT payload FROM events WHERE ticket_id = ? AND kind = 'implementer_result'"
+        " ORDER BY id DESC LIMIT 1",
+        (ticket_id,),
+    ).fetchone()
+    return (json.loads(row["payload"] or "{}").get("worktree") or None) if row else None
+
+
 def can_reopen(conn: sqlite3.Connection, ticket_id: int) -> bool:
     """True for a failed ticket that never opened a pull request."""
     ticket = conn.execute("SELECT status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()

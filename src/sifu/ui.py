@@ -419,6 +419,22 @@ def show_ticket(conn: sqlite3.Connection, db_path: Path, project_id: int | None)
         st.markdown(f"[PR #{by_id[ticket_id]['pr_number']}]({by_id[ticket_id]['pr_url']})")
     with st.expander("Ticket text"):
         st.text(ticket["body"] or "(empty)")
+    cfg = ops.effective_config(db_path)
+    used, limit = db.tokens_used(conn, ticket_id), cfg.router.max_tokens_per_ticket
+    st.progress(min(used / limit, 1.0) if limit else 1.0)
+    st.caption(f"{used:,} of {limit:,} model tokens")
+    files = ui_data.artifact_files(demo.artifacts_dir(db_path) / str(ticket_id))
+    if files:
+        with st.expander("Files"):
+            names = [p.name for p in files]
+            name = st.selectbox("File", names, key="file_pick")
+            content = next(p for p in files if p.name == name).read_text(encoding="utf-8")
+            st.code(content, language="markdown", wrap_lines=True)
+            st.download_button("Download", content, file_name=name, key="file_download")
+    worktree = ops.safe_worktree(ui_data.worktree_of(conn, ticket_id), cfg)
+    if worktree is not None:
+        with st.expander("Diff"):
+            st.code(ops.worktree_diff(worktree), language="diff")
     if not active and (request := ui_data.design_request(conn, ticket_id)):
         show_spec_chat(conn, db_path, ticket, request)
     for chat in ui_data.chats(conn, ticket_id):

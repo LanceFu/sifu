@@ -13,6 +13,7 @@ from sifu import live as live_wiring
 from sifu.config import Config, load_config
 from sifu.evidence import DATA
 from sifu.graph import Deps, continue_ticket, reopen_ticket, resume_interrupted, run_ticket
+from sifu.implementer import git_output
 from sifu.llm import LLM
 
 DATABASE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
@@ -41,6 +42,28 @@ def create_database(name: str, *, data_dir: Path | None = None, cfg: Config | No
     finally:
         conn.close()
     return path
+
+
+def safe_worktree(worktree: str | None, cfg: Config) -> Path | None:
+    """The worktree as a resolved path, only when it is a folder strictly inside worktrees_dir."""
+    if not worktree:
+        return None
+    root = Path(cfg.workspace.worktrees_dir).expanduser().resolve()
+    path = Path(worktree).resolve()
+    if path == root or not path.is_dir() or not path.is_relative_to(root):
+        return None
+    return path
+
+
+def worktree_diff(worktree: Path, limit: int = 200_000) -> str:
+    """The worktree's changes against HEAD and its untracked files, cut at ``limit`` characters."""
+    text = git_output(worktree, "diff", "HEAD")
+    untracked = git_output(worktree, "ls-files", "--others", "--exclude-standard").split()
+    if untracked:
+        text += "\nUntracked files:\n" + "\n".join(untracked) + "\n"
+    if len(text) > limit:
+        text = text[:limit] + f"\n(diff cut at {limit} characters)"
+    return text
 
 
 def effective_config(db_path: str | Path, cfg: Config | None = None) -> Config:

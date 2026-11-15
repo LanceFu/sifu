@@ -576,3 +576,26 @@ def test_a_new_database_is_created_and_selected(database, monkeypatch, tmp_path)
     assert not at.exception, at.exception
     assert at.session_state["db"] == made
     assert "Created trial.db." in [s.value for s in at.success]
+
+
+def test_the_ticket_tab_lists_the_tickets_files_and_shows_the_chosen_one(
+    database, monkeypatch, tmp_path
+):
+    folder = tmp_path / "1"
+    folder.mkdir()
+    (folder / "intent.md").write_text("# Intent: Rename a Trip")
+    (folder / "spec.md").write_text("# Spec: Rename a Trip\nAC-1 renames it.")
+    monkeypatch.setattr(demo, "artifacts_dir", lambda path, cfg=None: tmp_path)
+    at = run("Ticket")
+    pick = at.selectbox(key="file_pick")
+    assert pick.options == ["intent.md", "spec.md"]
+    pick.set_value("spec.md").run()
+    assert "AC-1 renames it." in text(at)
+
+
+def test_the_ticket_tab_shows_token_use_against_the_budget(database):
+    conn = db.connect(database)
+    db.record_run(conn, "reviewer", "m", 1, 1000, 500)
+    conn.close()
+    page = text(run("Ticket"))
+    assert "1,500 of" in page and "model tokens" in page

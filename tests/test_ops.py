@@ -1,5 +1,6 @@
 """The app's writes, by database path: create, run, answer and continue a ticket."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -154,3 +155,48 @@ def test_create_database_never_overwrites(tmp_path, cfg):
     with pytest.raises(FileExistsError):
         ops.create_database("trial", data_dir=tmp_path, cfg=cfg)
     assert (tmp_path / "trial.db").read_bytes() == before
+
+
+def test_safe_worktree_accepts_only_an_existing_folder_inside_the_worktrees_dir(tmp_path, cfg):
+    cfg.workspace.worktrees_dir = str(tmp_path / "wt")
+    inside = tmp_path / "wt" / "ticket-1"
+    inside.mkdir(parents=True)
+    assert ops.safe_worktree(str(inside), cfg) == inside.resolve()
+    assert ops.safe_worktree(str(tmp_path / "wt" / "gone"), cfg) is None
+    assert ops.safe_worktree(str(tmp_path), cfg) is None
+    assert ops.safe_worktree(str(inside / ".." / ".." / "elsewhere"), cfg) is None
+    assert ops.safe_worktree(None, cfg) is None
+    assert ops.safe_worktree(str(tmp_path / "wt"), cfg) is None  # the folder itself is not one
+
+
+def test_a_worktree_reached_through_a_symlink_out_of_the_folder_is_refused(tmp_path, cfg):
+    cfg.workspace.worktrees_dir = str(tmp_path / "wt")
+    (tmp_path / "wt").mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "wt" / "ticket-9").symlink_to(elsewhere)
+    assert ops.safe_worktree(str(tmp_path / "wt" / "ticket-9"), cfg) is None
+
+
+def test_worktree_diff_shows_changes_and_new_files_and_is_capped(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+
+    def git(*a):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-q")
+    (repo / "a.txt").write_text("one\n")
+    git("add", ".")
+    git("commit", "-qm", "first")
+    (repo / "a.txt").write_text("two\n")
+    (repo / "new.txt").write_text("x" * 50)
+    diff = ops.worktree_diff(repo)
+    assert "-one" in diff and "+two" in diff and "new.txt" in diff
+    capped = ops.worktree_diff(repo, limit=40)
+    assert len(capped) < 200 and capped.endswith("(diff cut at 40 characters)")

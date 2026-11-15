@@ -294,3 +294,26 @@ def test_a_stuck_build_request_offers_retry_and_close_and_takes_a_note(conn, pro
     [item] = ui_data.inbox(conn)
     assert item["actions"] == ["retry", "close"] and item["takes_note"] is True
     assert item["needs_live_tools"] is True
+
+
+def test_artifact_files_lists_markdown_files_in_the_folder_only(tmp_path):
+    folder = tmp_path / "ticket"
+    folder.mkdir()
+    (folder / "spec.md").write_text("s")
+    (folder / "intent.md").write_text("i")
+    (folder / "notes.txt").write_text("n")
+    (folder / "sub").mkdir()
+    (folder / "sub" / "deep.md").write_text("d")
+    outside = tmp_path / "secret.md"
+    outside.write_text("x")
+    (folder / "link.md").symlink_to(outside)
+    assert [p.name for p in ui_data.artifact_files(folder)] == ["intent.md", "spec.md"]
+    assert ui_data.artifact_files(folder / "missing") == []
+
+
+def test_worktree_of_is_the_last_implementer_runs_worktree(conn, project):
+    tid = db.create_ticket(conn, project, "Rename a Trip")
+    assert ui_data.worktree_of(conn, tid) is None
+    db.append_event(conn, tid, "implementer_result", "implementer", {"worktree": "/wt/ticket-1"})
+    db.append_event(conn, tid, "implementer_result", "implementer", {"worktree": "/wt/ticket-1-b"})
+    assert ui_data.worktree_of(conn, tid) == "/wt/ticket-1-b"
