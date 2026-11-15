@@ -1,55 +1,65 @@
 ---
-id: TP-0000
+id: {{id}}
 intent: intent.md
-intent_hash: [first 12 characters of the SHA-256 of intent.md, set by code]
-title: "[Same as the intent title]"
+intent_hash: {{intent_hash}}
+title: {{title_quoted}}
 author: sifu (spec writer)
-date: YYYY-MM-DD
-repo: tripplanner-ios
-requirements: [] # REQ-n from the PRD
+date: {{date}}
+repo: {{repo}}
+requirements: [{{requirements}}]
 ---
 
-# Spec: [title]
+# Spec: {{title}}
 
+{#
+  Sifu fills this file from the spec writer's output. The code supplies:
+    id, intent_hash (first 12 characters of the SHA-256 of intent.md), title, title_quoted, date,
+    repo, requirements, summary, traceability_rows, design_items, file_rows, test_rows,
+    assumption_items, review_items, out_of_scope_items.
+  The *_rows placeholders expand to table rows and the *_items placeholders to bullet lines, so
+  keep each on a line of its own under its table header or heading. Edit the headings, tables'
+  header rows, fixed sentences and front matter freely.
+  Never write a protected path (router.protected_paths, for example the CI workflow folder) in
+  the fixed text: the router reads this file, and a mention forces a human decision on every ticket.
+#}
 ## 1. Summary
 
-[Two or three sentences on what gets built.] Implements the intent in TP-0000; no behaviour is added beyond it.
+{{summary}} Implements the intent in {{id}}; no behaviour is added beyond it.
 
 ## 2. Traceability
 
 | Intent item | Satisfied by | Verified by |
 | :---- | :---- | :---- |
-| AC-1: [short name] | [files, or Section 3] | T1 |
-| REQ-n | Section 3 | T1 |
+{{traceability_rows}}
 
 ## 3. Design
 
-- [Decision, and why.]
+{{design_items}}
 
 ## 4. Files touched
 
 | File | Protected path? |
 | :---- | :---- |
-| `[path]` | yes / no |
+{{file_rows}}
 
-A protected path (for example `.github/`) forces a human decision in the risk router.
+A protected path forces a human decision in the risk router.
 
 ## 5. Acceptance criteria and test plan
 
 | ID | AC | Case |
 | :---- | :---- | :---- |
-| T1 | AC-1 | [the Given / When / Then line] |
+{{test_rows}}
 
 Every row needs an automated test. Build, SwiftLint and tests must pass.
 
 ## 6. Assumptions
 
-- [Anything the spec writer had to assume because the ticket did not say.]
+{{assumption_items}}
 
 ## 7. Review notes
 
-- [severity] [reviewer]: [message from the reviewers and the deterministic checks]
+{{review_items}}
 
 ## 8. Out of scope
 
-- [What this change deliberately will not build or change]
+{{out_of_scope_items}}
