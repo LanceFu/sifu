@@ -11,6 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from sifu import db
 from sifu.models import DecisionType, RiskTier, TicketStatus
 
 # Once one of these is logged the ticket is past Design: resuming it needs the real implementer,
@@ -32,6 +33,7 @@ KEY_KINDS = frozenset(
         "critic_cap",
         "critic_no_progress",
         "design_round_cap",
+        "build_requested",
         "pr_opened",
         "draft_pr_opened",
         "merge_blocked",
@@ -59,7 +61,8 @@ def board(conn: sqlite3.Connection, project_id: int | None = None) -> dict[str, 
     """Tickets grouped by status, one column per status in pipeline order (empty ones included).
 
     Each card has the ticket's id, title and last update, its latest pull request if it has one,
-    and ``waiting``: whether a human request is open on it.
+    ``waiting``: whether a human request is open on it, and ``running``: whether it has a job
+    queued or running.
     """
     where, args = ("WHERE project_id = ?", (project_id,)) if project_id is not None else ("", ())
     tickets = conn.execute(f"SELECT * FROM tickets {where} ORDER BY id", args).fetchall()
@@ -67,6 +70,7 @@ def board(conn: sqlite3.Connection, project_id: int | None = None) -> dict[str, 
         r["ticket_id"]
         for r in conn.execute("SELECT ticket_id FROM human_requests WHERE status = 'open'")
     }
+    running = {j["ticket_id"] for j in jobs(conn, active_only=True)}
     prs: dict[int, dict[str, Any]] = {}
     for event in conn.execute(
         "SELECT * FROM events WHERE kind IN ('pr_opened', 'draft_pr_opened') ORDER BY id"
@@ -83,9 +87,53 @@ def board(conn: sqlite3.Connection, project_id: int | None = None) -> dict[str, 
                 "pr_number": pr.get("number"),
                 "pr_url": pr.get("url"),
                 "waiting": t["id"] in waiting,
+                "running": t["id"] in running,
             }
         )
     return columns
+
+
+def jobs(conn: sqlite3.Connection, active_only: bool = False) -> list[dict[str, Any]]:
+    """Background jobs, newest first; empty when the database was recorded before jobs existed."""
+    try:
+        return [dict(row) for row in db.list_jobs(conn, active_only)]
+    except sqlite3.OperationalError:
+        return []
+
+
+def active_job(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:
+    """The ticket's queued or running job, if it has one."""
+    return next((j for j in jobs(conn, active_only=True) if j["ticket_id"] == ticket_id), None)
+
+
+def last_job(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:
+    """The ticket's newest job of any status."""
+    return next((j for j in jobs(conn) if j["ticket_id"] == ticket_id), None)
+
+
+def awaiting_build(conn: sqlite3.Connection, ticket_id: int) -> bool:
+    """True when the ticket's spec is accepted and it waits at the plan gate for Build.
+
+    That is: status ``spec``, its newest ``awaiting_plan`` event is not followed by a build or
+    a plan step, and no human request is open on it.
+    """
+    ticket = conn.execute("SELECT status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+    if ticket is None or ticket["status"] != TicketStatus.SPEC.value:
+        return False
+    gate = conn.execute(
+        "SELECT MAX(id) FROM events WHERE ticket_id = ? AND kind = 'awaiting_plan'", (ticket_id,)
+    ).fetchone()[0]
+    if gate is None:
+        return False
+    later = conn.execute(
+        "SELECT 1 FROM events WHERE ticket_id = ? AND id > ?"
+        " AND kind IN ('build_requested', 'implementer_result', 'stub_ran')",
+        (ticket_id, gate),
+    ).fetchone()
+    opened = conn.execute(
+        "SELECT 1 FROM human_requests WHERE ticket_id = ? AND status = 'open'", (ticket_id,)
+    ).fetchone()
+    return later is None and opened is None
 
 
 def _tier(value: Any) -> str:

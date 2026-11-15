@@ -12,38 +12,13 @@ the product repo at workspace.product_repo_path.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from sifu import db
-from sifu.config import load_config
-from sifu.credentials import get_github_token
-from sifu.demo import answer_request, load_seed_tickets, open_demo, show_decisions
-from sifu.github import GitHubClient
-from sifu.graph import Deps, is_paused, run_ticket
-from sifu.implementer import Implementer
-from sifu.pr_flow import publish_branch
-from sifu.verify import Verifier
+from sifu.demo import answer_request, load_seed_tickets, show_decisions
+from sifu.graph import is_paused, run_ticket
+from sifu.live import DEFAULT_DB, open_live
 
-ROOT = Path(__file__).resolve().parents[1]
-DB = str(ROOT / "data" / "live.db")
-
-
-def open_live(merge_mode: str, planner: bool = False, db_path: str = DB) -> tuple[Deps, int]:
-    """Open the database and wire the real implementer, verifier and GitHub client."""
-    cfg = load_config(ROOT / "config.yaml")
-    cfg.router.merge_mode = merge_mode
-    cfg.planner.enabled = planner
-    deps, project_id = open_demo(cfg, db_path=db_path)
-    token = get_github_token(cfg.github)  # a SecretStr; never printed
-    # ticket ids restart in every database, so a database other than the default tags its branches
-    tag = None if Path(db_path).resolve() == Path(DB).resolve() else Path(db_path).stem
-    deps.implementer = Implementer(cfg, tag=tag)
-    deps.verifier = Verifier(cfg)
-    deps.github = GitHubClient.from_config(cfg.github)
-    deps.publisher = lambda worktree, branch, message: publish_branch(
-        cfg.github, worktree, branch, message, token
-    )
-    return deps, project_id
+DB = str(DEFAULT_DB)
 
 
 def main() -> None:
@@ -59,7 +34,7 @@ def main() -> None:
     parser.add_argument("--db", default=DB, help="database to use (default: data/live.db)")
     parser.add_argument("--answer", nargs=2, metavar=("REQUEST_ID", "ANSWER"))
     args = parser.parse_args()
-    deps, project_id = open_live(args.merge_mode, args.planner, args.db)
+    deps, project_id = open_live(args.db, merge_mode=args.merge_mode, planner=args.planner)
     if args.answer:
         answer_request(deps, int(args.answer[0]), args.answer[1])
         return

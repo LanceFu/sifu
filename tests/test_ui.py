@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from sifu import brainstorm, db, demo, ui  # noqa: E402
+from sifu import brainstorm, db, demo, jobs, live, ops, ui  # noqa: E402
 from sifu.models import (  # noqa: E402
     DecisionResult,
     DecisionType,
@@ -15,6 +15,22 @@ from sifu.models import (  # noqa: E402
 )
 
 PR_URL = "https://github.com/LanceFu/tripplanner-ios/pull/2"
+
+
+@pytest.fixture(autouse=True)
+def no_real_work(monkeypatch):
+    """No test starts a worker thread or looks for claude, a token or the product repo."""
+    submitted = []
+    monkeypatch.setattr(
+        jobs,
+        "submit",
+        lambda path, kind, payload, ticket_id=None: (
+            submitted.append((kind, payload, ticket_id)) or len(submitted)
+        ),
+    )
+    monkeypatch.setattr(jobs, "recover", lambda path: 0)
+    monkeypatch.setattr(live, "missing_tools", lambda cfg=None: ["No GitHub token found."])
+    return submitted
 
 
 @pytest.fixture()
@@ -94,19 +110,14 @@ def test_inbox_sends_a_merge_request_to_the_command_line(database):
     at = run("Inbox")
     assert not [b for b in at.button if b.key and b.key.startswith("answer-2-")]
     assert "scripts/live_run.py" in text(at) and "--answer 2" in text(at)
+    assert "No GitHub token found." in text(at)
 
 
-def test_clicking_an_option_answers_the_request(database, monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        demo,
-        "answer_in_database",
-        lambda path, request, answer: calls.append((str(path), request, answer)),
-    )
+def test_clicking_an_option_answers_the_request(database, no_real_work):
     at = run("Inbox")
     next(b for b in at.button if b.key == "answer-1-approve").click().run()
     assert not at.exception
-    assert calls == [(str(database), 1, "approve")]
+    assert no_real_work == [("answer", {"request_id": 1, "answer": "approve", "live": False}, 1)]
 
 
 def test_the_views_are_tabs_and_only_the_open_one_is_built(database):
@@ -231,18 +242,20 @@ def test_a_reloaded_page_reopens_the_chat_named_in_the_url(database):
     assert at.text_area(key="intent_body").value == "D"
 
 
-def test_start_the_workflow_files_the_reviewed_draft_and_opens_the_ticket(database, monkeypatch):
+def test_start_the_workflow_files_the_reviewed_draft_and_opens_the_ticket(
+    database, monkeypatch, no_real_work
+):
     calls, started = [], []
 
-    def start(path, title, body, session):
+    def create(path, title, body, session):
         started.append((str(path), title, body, session))
         conn = db.connect(path)
         ticket_id = db.create_ticket(conn, 1, title, body)
         conn.close()
-        return ticket_id, "spec"
+        return ticket_id
 
     monkeypatch.setattr(brainstorm, "reply_in_database", fake_reply(calls))
-    monkeypatch.setattr(demo, "start_in_database", start)
+    monkeypatch.setattr(ops, "create_ticket", create)
     at = open_intent()
     at.chat_input(key="intent_input").set_value("Blank names save.").run()
     at.text_input(key="intent_title").set_value("Reject blank names").run()
@@ -251,8 +264,9 @@ def test_start_the_workflow_files_the_reviewed_draft_and_opens_the_ticket(databa
     assert started == [
         (str(database), "Reject blank names", "Given a blank name, Then fail.", calls[0]["session"])
     ]
+    assert no_real_work == [("run", {"ticket_id": 3, "live": False}, 3)]
     assert at.session_state["view"] == "Ticket" and at.session_state["ticket"] == 3
-    assert "Ticket #3 created; status is now spec." in [s.value for s in at.success]
+    assert "Ticket #3 created; the Design stage is running." in [s.value for s in at.success]
     at.session_state["view"] = "Board"
     at.run()
     assert at.button(key="intent_create") and not at.text_area  # the board again
@@ -288,7 +302,7 @@ def test_sending_the_reply_saves_the_spec_chat_then_answers_the_request(
         demo, "archive_chat_in_database", lambda *args: order.append(("archive", *args[1:]))
     )
     monkeypatch.setattr(
-        demo, "answer_in_database", lambda path, request, answer: order.append((request, answer))
+        jobs, "submit", lambda path, kind, payload, ticket_id=None: order.append((kind, payload))
     )
     at = run("Ticket")
     assert at.button(key="spec-send-1").disabled
@@ -297,7 +311,7 @@ def test_sending_the_reply_saves_the_spec_chat_then_answers_the_request(
     assert not at.exception, at.exception
     assert order == [
         ("archive", 1, "ticket-1-request-1", "spec", "chat-spec-1.md"),
-        (1, "Trim the name."),
+        ("answer", {"request_id": 1, "answer": "Trim the name.", "live": False}),
     ]
 
 
@@ -306,12 +320,12 @@ def test_approving_without_a_chat_answers_and_archives_nothing(database, monkeyp
     monkeypatch.setattr(demo, "artifacts_dir", lambda path: tmp_path)
     monkeypatch.setattr(demo, "archive_chat_in_database", lambda *args: order.append("archive"))
     monkeypatch.setattr(
-        demo, "answer_in_database", lambda path, request, answer: order.append((request, answer))
+        jobs, "submit", lambda path, kind, payload, ticket_id=None: order.append((kind, payload))
     )
     at = run("Ticket")
     at.button(key="spec-answer-1-approve").click().run()
     assert not at.exception, at.exception
-    assert order == [(1, "approve")]
+    assert order == [("answer", {"request_id": 1, "answer": "approve", "live": False})]
 
 
 def test_a_tickets_saved_chats_are_shown_with_a_download(database):
@@ -328,3 +342,119 @@ def test_a_tickets_saved_chats_are_shown_with_a_download(database):
         "Chat log: intent (2 messages)"
     ]
     assert chat_text(at) == [("user", "Rename it."), ("assistant", "To what?")]
+
+
+def ready(monkeypatch):
+    monkeypatch.setattr(live, "missing_tools", lambda cfg=None: [])
+
+
+def test_the_sidebar_says_whether_build_is_available(database, monkeypatch):
+    assert "Design only. Missing:" in text(run("Board"))
+    ready(monkeypatch)
+    assert "Build and merge: ready" in text(run("Board"))
+
+
+def test_with_the_tools_present_a_merge_request_gets_buttons_but_no_free_text(
+    database, monkeypatch, no_real_work
+):
+    ready(monkeypatch)
+    at = run("Inbox")
+    assert [b.label for b in at.button if b.key and b.key.startswith("answer-2-")] == [
+        "approve",
+        "close",
+    ]
+    assert "scripts/live_run.py" not in text(at)
+    assert not [w for w in at.text_input if w.key == "reply-2"]
+    next(b for b in at.button if b.key == "answer-2-approve").click().run()
+    assert no_real_work == [("answer", {"request_id": 2, "answer": "approve", "live": True}, 2)]
+
+
+def test_a_request_on_a_running_ticket_has_no_buttons(database):
+    conn = db.connect(database)
+    db.create_job(conn, "answer", {}, 1)
+    conn.close()
+    at = run("Inbox")
+    assert not [b for b in at.button if b.key and b.key.startswith("answer-1-")]
+    assert "Running…" in text(at)
+
+
+def test_a_refused_second_answer_warns_and_submits_nothing(database, monkeypatch):
+    def busy(path, kind, payload, ticket_id=None):
+        raise db.JobConflict("ticket 1 already has a job queued or running")
+
+    monkeypatch.setattr(jobs, "submit", busy)
+    at = run("Inbox")
+    next(b for b in at.button if b.key == "answer-1-approve").click().run()
+    assert not at.exception
+    assert [w.value for w in at.warning] == ["Ticket #1 is already running."]
+
+
+def test_the_ticket_tab_shows_a_running_job_and_hides_the_spec_chat(database):
+    conn = db.connect(database)
+    job = db.create_job(conn, "answer", {}, 1)
+    conn.close()
+    at = run("Ticket")
+    assert f"Running: answer (job {job}, queued)" in text(at)
+    assert not at.chat_input and at.button(key=f"job-cancel-{job}")
+
+
+def test_the_ticket_tab_shows_why_the_last_run_failed(database):
+    conn = db.connect(database)
+    job = db.create_job(conn, "run", {}, 1)
+    db.start_job(conn, job)
+    db.finish_job(conn, job, error="ConnectionError: ollama is down")
+    conn.close()
+    assert "The last run failed: ConnectionError: ollama is down" in [
+        e.value for e in run("Ticket").error
+    ]
+
+
+def spec_ticket_waiting_at_the_plan_gate(database):
+    conn = db.connect(database)
+    ticket = db.create_ticket(conn, 1, "Remove a Stop")
+    db.set_status(conn, ticket, TicketStatus.SPEC)
+    db.append_event(conn, ticket, "awaiting_plan", "supervisor", {})
+    conn.close()
+    return ticket
+
+
+def open_ticket(ticket):
+    at = AppTest.from_file(ui.__file__, default_timeout=30)
+    at.session_state["view"] = "Ticket"
+    at.session_state["ticket"] = ticket
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def test_continue_to_build_is_offered_only_when_the_tools_are_present(
+    database, monkeypatch, no_real_work
+):
+    ticket = spec_ticket_waiting_at_the_plan_gate(database)
+    at = open_ticket(ticket)
+    assert not [b for b in at.button if b.key == "ticket_continue"]
+    assert "Build needs: No GitHub token found." in text(at)
+    ready(monkeypatch)
+    at = open_ticket(ticket)
+    at.button(key="ticket_continue").click().run()
+    assert no_real_work == [("continue", {"ticket_id": ticket}, ticket)]
+
+
+def test_a_board_card_shows_a_running_ticket(database):
+    conn = db.connect(database)
+    db.create_job(conn, "run", {}, 2)
+    conn.close()
+    assert "Running…" in text(run("Board"))
+
+
+def test_viewing_never_writes_even_with_jobs_and_build_tools(database, monkeypatch):
+    conn = db.connect(database)
+    job = db.create_job(conn, "run", {}, 1)
+    db.start_job(conn, job)
+    db.finish_job(conn, job, error="boom")
+    conn.close()
+    ready(monkeypatch)
+    before = database.read_bytes()
+    for view in ui.VIEWS:
+        run(view)
+    assert database.read_bytes() == before

@@ -222,3 +222,56 @@ def test_design_request_is_the_open_request_the_ui_can_answer(conn, project):
     assert ui_data.design_request(conn, spec)["question"] == "Approve?"
     assert ui_data.design_request(conn, merge) is None
     assert ui_data.design_request(conn, idle) is None
+
+
+def test_jobs_are_read_newest_first_and_the_active_one_is_found(conn, project):
+    tid = db.create_ticket(conn, project, "Rename a Trip")
+    first = db.create_job(conn, "run", {}, tid)
+    db.start_job(conn, first)
+    db.finish_job(conn, first, error="boom")
+    second = db.create_job(conn, "answer", {}, tid)
+    assert [j["id"] for j in ui_data.jobs(conn)] == [second, first]
+    assert [j["id"] for j in ui_data.jobs(conn, active_only=True)] == [second]
+    assert ui_data.active_job(conn, tid)["kind"] == "answer"
+    db.cancel_job(conn, second)
+    assert ui_data.active_job(conn, tid) is None
+    assert ui_data.last_job(conn, tid)["status"] == "cancelled"
+
+
+def test_job_queries_are_empty_on_a_database_recorded_before_jobs(conn, project):
+    tid = db.create_ticket(conn, project, "Rename a Trip")
+    conn.execute("DROP INDEX jobs_one_active_per_ticket")
+    conn.execute("DROP TABLE jobs")
+    assert ui_data.jobs(conn) == [] and ui_data.active_job(conn, tid) is None
+    assert ui_data.last_job(conn, tid) is None
+    assert ui_data.board(conn)["intent"][0]["running"] is False
+
+
+def test_the_board_marks_a_ticket_with_an_active_job(conn, project):
+    busy = db.create_ticket(conn, project, "Rename a Trip")
+    idle = db.create_ticket(conn, project, "Remove a Stop")
+    db.create_job(conn, "run", {}, busy)
+    cards = {c["id"]: c["running"] for c in ui_data.board(conn)["intent"]}
+    assert cards == {busy: True, idle: False}
+
+
+def test_awaiting_build_is_a_spec_ticket_whose_last_step_was_the_plan_gate(conn, project):
+    waiting = db.create_ticket(conn, project, "Rename a Trip")
+    db.set_status(conn, waiting, TicketStatus.SPEC)
+    db.append_event(conn, waiting, "awaiting_plan", "supervisor", {})
+    assert ui_data.awaiting_build(conn, waiting) is True
+
+    fresh = db.create_ticket(conn, project, "Remove a Stop")
+    assert ui_data.awaiting_build(conn, fresh) is False  # still at intent
+
+    built = db.create_ticket(conn, project, "Limit a Day Plan")
+    db.set_status(conn, built, TicketStatus.SPEC)
+    db.append_event(conn, built, "awaiting_plan", "supervisor", {})
+    db.append_event(conn, built, "build_requested", "human", {})
+    assert ui_data.awaiting_build(conn, built) is False  # already asked for
+
+    asked = db.create_ticket(conn, project, "Reorder Stops")
+    db.set_status(conn, asked, TicketStatus.SPEC)
+    db.append_event(conn, asked, "awaiting_plan", "supervisor", {})
+    db.open_human_request(conn, asked, "Approve?", ["approve", "close"])
+    assert ui_data.awaiting_build(conn, asked) is False  # a request is open

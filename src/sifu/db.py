@@ -1,4 +1,4 @@
-"""SQLite persistence for projects, tickets, the event log, decisions, requests and chats.
+"""SQLite persistence for projects, tickets, the event log, decisions, requests, chats and jobs.
 
 LangGraph keeps its own checkpoints (keyed by ticket id as thread id). These tables are the
 application's audit trail and are what the UI and the evaluation harness read.
@@ -93,6 +93,20 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS chat_messages_session ON chat_messages (session, id);
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER REFERENCES tickets(id),
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'queued',
+    result TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_active_per_ticket
+    ON jobs (ticket_id) WHERE status IN ('queued', 'running');
 """
 
 _RESOLUTION_BY_TIER = {
@@ -102,11 +116,15 @@ _RESOLUTION_BY_TIER = {
 }
 
 
+class JobConflict(ValueError):
+    """A ticket already has a job queued or running."""
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     """Open a connection with foreign keys on, creating the parent directory if needed."""
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -358,3 +376,76 @@ def attach_chat(conn: sqlite3.Connection, session: str, ticket_id: int) -> int:
             "UPDATE chat_messages SET ticket_id = ? WHERE session = ?", (ticket_id, session)
         )
     return int(cur.rowcount)
+
+
+def create_job(
+    conn: sqlite3.Connection,
+    kind: str,
+    payload: Mapping[str, Any],
+    ticket_id: int | None = None,
+) -> int:
+    """Queue a job; raise JobConflict if the ticket already has one queued or running."""
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO jobs (ticket_id, kind, payload) VALUES (?, ?, ?)",
+                (ticket_id, kind, json.dumps(payload)),
+            )
+    except sqlite3.IntegrityError as exc:
+        raise JobConflict(f"ticket {ticket_id} already has a job queued or running") from exc
+    return int(cur.lastrowid)
+
+
+def start_job(conn: sqlite3.Connection, job_id: int) -> bool:
+    """Mark a queued job running; False when it is no longer queued (for example cancelled)."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'running', started_at = datetime('now')"
+            " WHERE id = ? AND status = 'queued'",
+            (job_id,),
+        )
+    return cur.rowcount == 1
+
+
+def finish_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    result: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Record how a job ended: failed when there is an error, otherwise done."""
+    status = "failed" if error is not None else "done"
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status = ?, result = ?, error = ?, finished_at = datetime('now')"
+            " WHERE id = ?",
+            (status, result, error, job_id),
+        )
+
+
+def cancel_job(conn: sqlite3.Connection, job_id: int) -> bool:
+    """Cancel a job that has not started; False when it already started or ended."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'cancelled', finished_at = datetime('now')"
+            " WHERE id = ? AND status = 'queued'",
+            (job_id,),
+        )
+    return cur.rowcount == 1
+
+
+def interrupt_stale_jobs(conn: sqlite3.Connection) -> int:
+    """Mark every queued or running job interrupted (its process is gone); return the count."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'interrupted', finished_at = datetime('now')"
+            " WHERE status IN ('queued', 'running')"
+        )
+    return int(cur.rowcount)
+
+
+def list_jobs(conn: sqlite3.Connection, active_only: bool = False) -> list[sqlite3.Row]:
+    """Jobs newest first; with active_only, only those queued or running."""
+    where = " WHERE status IN ('queued', 'running')" if active_only else ""
+    return conn.execute(f"SELECT * FROM jobs{where} ORDER BY id DESC").fetchall()

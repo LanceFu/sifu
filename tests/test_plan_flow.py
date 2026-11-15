@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("langgraph")
 
 from sifu import db  # noqa: E402
-from sifu.graph import is_paused, resume_ticket, run_ticket  # noqa: E402
+from sifu.graph import continue_ticket, is_paused, resume_ticket, run_ticket  # noqa: E402
 from tests.fakes import FakeLLM  # noqa: E402
 
 BODY = "Given a Traveller saves a Trip, When the name is blank, Then nameBlank is thrown."
@@ -121,3 +121,44 @@ def test_with_the_planner_off_nothing_changes(cfg, conn, make_deps, make_ticket)
     run_ticket(make_deps(llm), ticket)
     assert "Planner" not in [c["key"] for c in llm.calls]
     assert db.get_ticket(conn, ticket)["status"] == "spec"  # still waiting for a plan
+
+
+def test_a_ticket_stopped_at_the_plan_gate_continues_into_build(cfg, conn, make_deps, make_ticket):
+    deps = make_deps(FakeLLM())  # planner off, no implementer: Build and Test are stubs
+    ticket = make_ticket("T", BODY)
+    run_ticket(deps, ticket)
+    assert db.get_ticket(conn, ticket)["status"] == "spec"
+    state = continue_ticket(deps, ticket)
+    assert state["status"] == "done" and db.get_ticket(conn, ticket)["status"] == "done"
+    kinds = [e["kind"] for e in db.list_events(conn, ticket)]
+    assert kinds.index("build_requested") < kinds.index("stub_ran")
+
+
+def test_continuing_with_the_planner_on_writes_the_plan_first(
+    cfg, conn, make_deps, make_ticket, tmp_path
+):
+    llm = FakeLLM({"Planner": plan_reply("Sources/Trip.swift")})
+    deps = make_deps(llm)
+    ticket = make_ticket("T", BODY)
+    run_ticket(deps, ticket)
+    cfg.planner.enabled = True
+    cfg.workspace.product_repo_path = str(tmp_path / "no-repo")
+    continue_ticket(deps, ticket)
+    kinds = [e["kind"] for e in db.list_events(conn, ticket)]
+    assert [c["key"] for c in llm.calls].count("Planner") == 1
+    assert "plan_accepted" in kinds or "human_request_opened" in kinds  # the plan was routed
+
+
+def test_only_a_ticket_waiting_at_the_plan_gate_can_be_continued(conn, make_deps, make_ticket):
+    deps = make_deps(FakeLLM())
+    never_run = make_ticket("T", BODY)
+    with pytest.raises(ValueError, match="no accepted spec"):
+        continue_ticket(deps, never_run)
+    done = make_ticket("T2", BODY)
+    run_ticket(deps, done, facts={"plan_accepted": True})
+    with pytest.raises(ValueError, match="is done"):
+        continue_ticket(deps, done)
+    paused = make_ticket("T3", BODY + " Also add a dependency in Package.swift.")
+    run_ticket(deps, paused)
+    with pytest.raises(ValueError, match="waiting for an answer"):
+        continue_ticket(deps, paused)

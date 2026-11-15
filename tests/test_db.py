@@ -115,3 +115,71 @@ def test_init_db_adds_the_chat_table_to_an_older_database(conn):
     conn.execute("DROP TABLE chat_messages")
     db.init_db(conn)
     assert db.list_chat(conn, "s1") == []
+
+
+def test_a_job_moves_from_queued_to_running_to_done(conn, ticket):
+    job = db.create_job(conn, "run", {"ticket_id": ticket, "live": False}, ticket)
+    [row] = db.list_jobs(conn)
+    assert (row["status"], row["kind"], json.loads(row["payload"])["live"]) == (
+        "queued",
+        "run",
+        False,
+    )
+    assert db.start_job(conn, job) is True and db.start_job(conn, job) is False
+    assert db.list_jobs(conn)[0]["started_at"] is not None
+    db.finish_job(conn, job, result="spec")
+    [row] = db.list_jobs(conn)
+    assert (row["status"], row["result"], row["error"]) == ("done", "spec", None)
+    assert row["finished_at"] is not None and db.list_jobs(conn, active_only=True) == []
+
+
+def test_a_job_that_ends_with_an_error_is_failed(conn, ticket):
+    job = db.create_job(conn, "run", {}, ticket)
+    db.start_job(conn, job)
+    db.finish_job(conn, job, error="ConnectionError: ollama is down")
+    assert tuple(db.list_jobs(conn)[0][k] for k in ("status", "error")) == (
+        "failed",
+        "ConnectionError: ollama is down",
+    )
+
+
+def test_a_ticket_has_at_most_one_active_job(conn, ticket):
+    first = db.create_job(conn, "run", {}, ticket)
+    with pytest.raises(db.JobConflict):
+        db.create_job(conn, "answer", {}, ticket)
+    db.start_job(conn, first)
+    with pytest.raises(db.JobConflict):
+        db.create_job(conn, "answer", {}, ticket)
+    db.finish_job(conn, first, result="spec")
+    assert db.create_job(conn, "answer", {}, ticket) > first  # allowed once the first ended
+
+
+def test_jobs_without_a_ticket_do_not_conflict(conn):
+    assert db.create_job(conn, "lessons", {}) != db.create_job(conn, "lessons", {})
+
+
+def test_only_a_queued_job_can_be_cancelled(conn, ticket):
+    job = db.create_job(conn, "run", {}, ticket)
+    assert db.cancel_job(conn, job) is True and db.list_jobs(conn)[0]["status"] == "cancelled"
+    assert db.start_job(conn, job) is False  # a cancelled job never starts
+    other = db.create_job(conn, "run", {}, ticket)
+    db.start_job(conn, other)
+    assert db.cancel_job(conn, other) is False
+
+
+def test_stale_jobs_are_marked_interrupted(conn, ticket):
+    running = db.create_job(conn, "run", {}, ticket)
+    db.start_job(conn, running)
+    queued = db.create_job(conn, "lessons", {})
+    assert db.interrupt_stale_jobs(conn) == 2
+    assert {r["id"]: r["status"] for r in db.list_jobs(conn)} == {
+        running: "interrupted",
+        queued: "interrupted",
+    }
+    assert db.interrupt_stale_jobs(conn) == 0
+
+
+def test_list_jobs_is_newest_first(conn, ticket):
+    first = db.create_job(conn, "lessons", {})
+    second = db.create_job(conn, "lessons", {})
+    assert [r["id"] for r in db.list_jobs(conn)] == [second, first]

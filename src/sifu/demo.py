@@ -204,36 +204,6 @@ def archive_chat_in_database(
         conn.close()
 
 
-def start_in_database(
-    db_path: str | Path,
-    title: str,
-    body: str,
-    session: str | None = None,
-    cfg: Config | None = None,
-    llm: LLM | None = None,
-) -> tuple[int, str]:
-    """Create a ticket from a reviewed draft, run its Design stage and return (id, status).
-
-    This is the "Create" button on a new ticket's draft. The Design stage writes ``intent.md`` from
-    the title and body, then a spec or questions. ``session`` is the brainstorm chat that led to
-    the draft: it is linked to the ticket and written to ``chat-intent.md``. As with
-    ``answer_in_database`` the planner is off, so an accepted spec waits at the plan gate.
-    """
-    if not title.strip() or not body.strip():
-        raise ValueError("a ticket needs a title and a description")
-    cfg = (cfg or load_config(ROOT / "config.yaml")).model_copy(deep=True)
-    cfg.planner.enabled = False
-    deps, project_id = open_demo(cfg, llm, str(db_path))
-    try:
-        ticket_id = db.create_ticket(deps.conn, project_id, title.strip(), body.strip())
-        if session:
-            archive_chat(deps.conn, deps.artifacts_dir, ticket_id, session, "intent")
-        run_ticket(deps, ticket_id)
-        return ticket_id, str(db.get_ticket(deps.conn, ticket_id)["status"])
-    finally:
-        deps.conn.close()
-
-
 def _print_row(row: dict[str, Any], events: list[Any]) -> None:
     mark = "ok " if row["outcome"] == row["expected"] else "!! "
     print(
