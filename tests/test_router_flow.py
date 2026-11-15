@@ -401,3 +401,14 @@ def test_resume_refuses_a_ticket_waiting_for_an_answer_or_with_nothing_left(
     with pytest.raises(ValueError, match="nothing to resume"):
         resume_interrupted(deps, finished)
     assert len(db.open_requests(conn)) == 1  # nothing ran
+
+
+def test_the_design_stage_writes_intent_md_with_the_tickets_creation_date(
+    conn, make_deps, make_ticket
+):
+    deps = make_deps(FakeLLM())
+    ticket = make_ticket("T", BODY)
+    run_ticket(deps, ticket)
+    created = db.get_ticket(conn, ticket)["created_at"][:10]
+    intent = (deps.artifacts_dir / str(ticket) / "intent.md").read_text()
+    assert f"\ndate: {created}\n" in intent

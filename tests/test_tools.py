@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 pytest.importorskip("fastmcp")
@@ -17,6 +19,7 @@ def test_supervisor_reads_a_ticket_through_mcp(conn, make_ticket, gateway):
     ticket = make_ticket("Title", "Body")
     data = gw.call("supervisor", "get_ticket", ticket_id=ticket)
     assert data["title"] == "Title" and data["status"] == "intent"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", data["created_at"])
     assert events[-1][0] == "tool_call"
 
 
