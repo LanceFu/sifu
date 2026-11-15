@@ -35,9 +35,12 @@ def test_rework_loop_from_test_back_to_build():
     assert_transition(S.TEST, S.BUILD, {"spec_accepted": True, "plan_accepted": True})
 
 
-def test_terminal_states_have_no_exits():
+def test_done_is_terminal_and_failed_can_only_be_reopened():
     assert TRANSITIONS[S.DONE] == frozenset()
-    assert TRANSITIONS[S.FAILED] == frozenset()
+    assert TRANSITIONS[S.FAILED] == frozenset({S.INTENT})
+    assert_transition(S.FAILED, S.INTENT)
+    with pytest.raises(InvalidTransition):
+        assert_transition(S.FAILED, S.BUILD, {"spec_accepted": True, "plan_accepted": True})
 
 
 @pytest.mark.parametrize("stage", ACTIVE)

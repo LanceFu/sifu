@@ -338,6 +338,23 @@ def record_run(
     return int(cur.lastrowid)
 
 
+def tokens_used(conn: sqlite3.Connection, ticket_id: int) -> int:
+    """Tokens the ticket's model calls have used since it was last reopened (or ever)."""
+    event = conn.execute(
+        "SELECT payload FROM events WHERE ticket_id = ? AND kind = 'ticket_reopened'"
+        " ORDER BY id DESC LIMIT 1",
+        (ticket_id,),
+    ).fetchone()
+    baseline = int(json.loads(event["payload"]).get("runs_before", 0)) if event else 0
+    return int(
+        conn.execute(
+            "SELECT COALESCE(SUM(COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0)), 0)"
+            " FROM runs WHERE ticket_id = ? AND id > ?",
+            (ticket_id, baseline),
+        ).fetchone()[0]
+    )
+
+
 def add_chat_message(
     conn: sqlite3.Connection,
     session: str,

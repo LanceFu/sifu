@@ -83,3 +83,28 @@ def test_a_draft_flag_reaches_github():
     repo = Repo()
     client(repo).create_pr(head="h", base="main", title="t", body="b", draft=True)
     assert repo.created["draft"] is True
+
+
+def test_mark_ready_takes_the_pull_request_out_of_draft():
+    calls = []
+
+    class PR:
+        def mark_ready_for_review(self):
+            calls.append("ready")
+
+    class FakeRepo:
+        def get_pull(self, number):
+            calls.append(number)
+            return PR()
+
+    client(FakeRepo()).mark_ready(7)
+    assert calls == [7, "ready"]
+
+
+def test_mark_ready_wraps_a_failure():
+    class FakeRepo:
+        def get_pull(self, number):
+            raise RuntimeError("404")
+
+    with pytest.raises(GitHubError, match="get pull request failed"):
+        client(FakeRepo()).mark_ready(7)

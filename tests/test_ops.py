@@ -104,3 +104,18 @@ def test_an_exception_inside_a_run_reaches_the_caller_and_fails_the_ticket(home,
     with pytest.raises(ConnectionError):
         ops.run(home, ticket, live=False, cfg=cfg, llm=Down())
     assert db.get_ticket(db.connect(home), ticket)["status"] == "failed"
+
+
+def test_reopen_runs_a_failed_ticket_again(home, cfg):
+    ticket = ops.create_ticket(home, "T", PROTECTED_BODY, cfg=cfg)
+    ops.run(home, ticket, live=False, cfg=cfg, llm=FakeLLM())
+    [request] = db.open_requests(db.connect(home))
+    assert ops.answer(home, request["id"], "close", live=False, cfg=cfg, llm=FakeLLM()) == "failed"
+    assert ops.reopen(home, ticket, live=False, cfg=cfg, llm=FakeLLM()) == "needs_human"
+
+
+def test_resume_refuses_a_ticket_with_nothing_to_resume(home, cfg):
+    ticket = ops.create_ticket(home, "T", BODY, cfg=cfg)
+    ops.run(home, ticket, live=False, cfg=cfg, llm=FakeLLM())
+    with pytest.raises(ValueError, match="nothing to resume"):
+        ops.resume(home, ticket, live=False, cfg=cfg, llm=FakeLLM())

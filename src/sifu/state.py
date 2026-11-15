@@ -15,7 +15,7 @@ TRANSITIONS: dict[TicketStatus, frozenset[TicketStatus]] = {
     S.TEST: frozenset({S.DONE, S.BUILD, S.NEEDS_HUMAN, S.FAILED}),
     S.NEEDS_HUMAN: frozenset({S.INTENT, S.SPEC, S.BUILD, S.TEST, S.FAILED}),
     S.DONE: frozenset(),
-    S.FAILED: frozenset(),
+    S.FAILED: frozenset({S.INTENT}),  # reopening: the one way out of failed
 }
 
 # Facts that must be true before entering a stage.

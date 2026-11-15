@@ -10,6 +10,8 @@ from sifu.implementer import (
     build_env,
     changed_files,
     create_worktree,
+    git_output,
+    remove_worktree,
 )
 
 
@@ -193,3 +195,12 @@ def test_first_run_never_resumes(cfg, repo, tmp_path):
     runner = make_runner(reply())
     implementer(cfg, repo, tmp_path, runner)(14, "spec", "conv", session_id="abc")
     assert "--resume" not in runner.seen["cmd"]
+
+
+def test_remove_worktree_deletes_the_worktree_and_its_branch(repo, tmp_path):
+    worktrees = tmp_path / "wt"
+    path, branch = create_worktree(repo, worktrees, 5, "d")
+    assert remove_worktree(repo, worktrees, 5, "d") is True
+    assert not path.exists()
+    assert branch not in git_output(repo, "branch", "--list", branch)
+    assert remove_worktree(repo, worktrees, 5, "d") is False  # nothing left to remove

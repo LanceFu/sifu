@@ -19,6 +19,7 @@ design mode and the sidebar says what is missing.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -362,12 +363,25 @@ def _show_job_state(
         st.error(f"The last run failed: {last['error']}")
     elif last and last["status"] == "interrupted":
         st.warning("The last run was cut off when the app stopped.")
+        _resume_button(db_path, ticket_id, last)
     elif ui_data.awaiting_build(conn, ticket_id):
         missing = _missing()
         if missing:
             st.caption("This ticket's spec is accepted. Build needs: " + "; ".join(missing))
         elif st.button("Continue to Build", type="primary", key="ticket_continue"):
             _submit(db_path, "continue", {"ticket_id": ticket_id}, ticket_id)
+    if ui_data.can_reopen(conn, ticket_id) and st.button("Reopen", key="ticket_reopen"):
+        _submit(db_path, "reopen", {"ticket_id": ticket_id, "live": not _missing()}, ticket_id)
+
+
+def _resume_button(db_path: Path, ticket_id: int, last: dict[str, Any]) -> None:
+    """Resume a cut-off run in the mode it was started in; live needs the build tools."""
+    live_run = json.loads(last["payload"] or "{}").get("live", True)
+    missing = _missing() if live_run else []
+    if missing:
+        st.caption("Resume needs: " + "; ".join(missing))
+    if st.button("Resume", key="ticket_resume", disabled=bool(missing)):
+        _submit(db_path, "resume", {"ticket_id": ticket_id, "live": live_run}, ticket_id)
 
 
 def _submit(db_path: Path, kind: str, payload: dict[str, Any], ticket_id: int) -> None:
@@ -491,11 +505,18 @@ def show_inbox(conn: sqlite3.Connection, db_path: Path) -> None:
                     language="bash",
                 )
                 continue
+            note = ""
+            if item["takes_note"]:
+                note = st.text_input(
+                    "Note for the implementer (optional)", key=f"note-{item['id']}"
+                ).strip()
             for action in item["actions"]:
                 if st.button(action, key=f"answer-{item['id']}-{action}"):
-                    _answer(db_path, item, action)
-            if item["stage"] == "merge":
-                continue  # the graph closes the ticket on any merge answer but approve
+                    _answer(
+                        db_path, item, f"retry: {note}" if action == "retry" and note else action
+                    )
+            if item["stage"] == "merge" or "retry" in item["options"]:
+                continue  # a merge or a stuck request takes no free-text reply
             reply = st.text_input("Reply in your own words", key=f"reply-{item['id']}")
             if st.button("Send reply", key=f"send-{item['id']}") and reply.strip():
                 _answer(db_path, item, reply.strip())

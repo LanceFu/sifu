@@ -8,7 +8,8 @@ fails in round 1, passes in round 2, and a PR opens (the plan's "sent back and f
 Answer the merge request with ``close`` to leave the PR open without merging.
 
 ``always``: the violation comes back after every fix, so the loop gives up (verify_no_progress)
-and Sifu opens a *draft* PR with the findings as a comment. The ticket stays in Needs Human.
+and Sifu opens a *draft* PR with the findings as a comment. The ticket waits in Needs Human on a
+retry-or-close request.
 
 Each run uses its own fresh database (data/probe-<scenario>.db) and a unique branch name, and
 ends with a PASS/FAIL checklist. The planted code is a force cast, which SwiftLint reports as
@@ -154,6 +155,11 @@ def main() -> None:
                 ),
                 ("a draft PR was opened", "draft_pr_opened" in seen and "pr_opened" not in seen),
                 ("the ticket is waiting in needs_human", status == "needs_human"),
+                (
+                    "one open request offers retry",
+                    len(requests := db.open_requests(deps.conn)) == 1
+                    and "retry" in json.loads(requests[0]["options"]),
+                ),
             ]
         )
         print(

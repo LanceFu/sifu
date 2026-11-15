@@ -7,7 +7,16 @@ import pytest
 pytest.importorskip("langgraph")
 
 from sifu import db  # noqa: E402
-from sifu.graph import is_paused, resume_ticket, run_ticket, sqlite_checkpointer  # noqa: E402
+from sifu.graph import (  # noqa: E402
+    _thread,
+    build_graph,
+    is_paused,
+    reopen_ticket,
+    resume_interrupted,
+    resume_ticket,
+    run_ticket,
+    sqlite_checkpointer,
+)
 from sifu.implementer import ImplementerResult  # noqa: E402
 from tests.fakes import CLEAN, FakeLLM  # noqa: E402
 
@@ -295,3 +304,100 @@ def test_answer_in_database_resumes_from_the_file_and_stops_before_build(
     kinds = [e["kind"] for e in db.list_events(check, ids["protected_path"])]
     assert "spec_accepted" in kinds and "stub_ran" not in kinds
     assert cfg.planner.enabled is True  # the caller's config is left alone
+
+
+def failed_ticket(deps, conn, make_ticket):
+    """A ticket closed by a person at its spec request: status failed, with old state."""
+    ticket = make_ticket("T", PROTECTED_BODY)
+    run_ticket(deps, ticket)
+    resume_ticket(deps, ticket, "close")
+    assert status(conn, ticket) == "failed"
+    return ticket
+
+
+def test_reopening_a_failed_ticket_runs_the_design_stage_again_from_a_clean_state(
+    conn, make_ticket, make_deps
+):
+    deps = make_deps(FakeLLM())
+    ticket = failed_ticket(deps, conn, make_ticket)
+    state = reopen_ticket(deps, ticket)
+    assert is_paused(state) and status(conn, ticket) == "needs_human"  # asks again, as before
+    assert state.get("round", 0) == 0 and "answer" not in state  # nothing carried over
+    kinds = [e["kind"] for e in db.list_events(conn, ticket)]
+    assert kinds.count("design_started") == 2 and "ticket_reopened" in kinds
+    assert len(db.open_requests(conn)) == 1
+
+
+def test_a_reopened_ticket_can_be_answered_and_reopened_again(conn, make_ticket, make_deps):
+    deps = make_deps(FakeLLM())
+    ticket = failed_ticket(deps, conn, make_ticket)
+    reopen_ticket(deps, ticket)
+    resume_ticket(deps, ticket, "close")  # resume finds the new thread
+    assert status(conn, ticket) == "failed"
+    assert is_paused(reopen_ticket(deps, ticket))
+
+
+def test_a_reopened_ticket_gets_a_fresh_token_budget(conn, cfg, make_ticket, make_deps):
+    deps = make_deps(FakeLLM())
+    ticket = failed_ticket(deps, conn, make_ticket)
+    spent = db.tokens_used(conn, ticket)
+    assert spent > 0  # the fake model reports tokens, so the whole budget below is used up
+    cfg.router.max_tokens_per_ticket = spent
+    assert is_paused(reopen_ticket(deps, ticket))  # not failed at the first model call
+
+
+def test_only_a_failed_ticket_without_a_pull_request_can_be_reopened(conn, make_ticket, make_deps):
+    deps = make_deps(FakeLLM())
+    fine = make_ticket("T", BODY)
+    with pytest.raises(ValueError, match="not failed"):
+        reopen_ticket(deps, fine)
+    ticket = failed_ticket(deps, conn, make_ticket)
+    db.append_event(conn, ticket, "pr_opened", "supervisor", {"number": 7, "url": "u"})
+    with pytest.raises(ValueError, match="pull request"):
+        reopen_ticket(deps, ticket)
+    assert status(conn, ticket) == "failed"
+
+
+def test_reopening_discards_the_old_worktree(conn, make_ticket, make_deps):
+    deps = make_deps(FakeLLM())
+    discarded = []
+
+    class Impl:
+        def discard(self, ticket_id):
+            discarded.append(ticket_id)
+
+    deps.implementer = Impl()
+    ticket = failed_ticket(deps, conn, make_ticket)
+    reopen_ticket(deps, ticket)
+    assert discarded == [ticket]
+
+
+def test_a_run_cut_off_before_build_is_resumed_from_its_checkpoint(conn, make_ticket, make_deps):
+    deps = make_deps(FakeLLM())
+    ticket = make_ticket("T", BODY)
+    # stop the graph just before Build, as a killed process would leave it
+    build_graph(deps).invoke(
+        {"ticket_id": ticket, "facts": {"plan_accepted": True}},
+        _thread(deps, ticket),
+        interrupt_before=["build"],
+    )
+    assert status(conn, ticket) == "spec"
+    state = resume_interrupted(deps, ticket)
+    assert state["status"] == "done" and status(conn, ticket) == "done"
+    kinds = [e["kind"] for e in db.list_events(conn, ticket)]
+    assert kinds.count("design_started") == 1 and "run_resumed" in kinds  # not restarted
+
+
+def test_resume_refuses_a_ticket_waiting_for_an_answer_or_with_nothing_left(
+    conn, make_ticket, make_deps
+):
+    deps = make_deps(FakeLLM())
+    waiting = make_ticket("T", PROTECTED_BODY)
+    run_ticket(deps, waiting)
+    with pytest.raises(ValueError, match="waiting for an answer"):
+        resume_interrupted(deps, waiting)
+    finished = make_ticket("T2", BODY)
+    run_ticket(deps, finished)
+    with pytest.raises(ValueError, match="nothing to resume"):
+        resume_interrupted(deps, finished)
+    assert len(db.open_requests(conn)) == 1  # nothing ran

@@ -158,6 +158,8 @@ After the Design stage drafts `spec.md`, two assessor models (`models.risk_asses
 requirement, or a failed assessor all force a human, and the models can only raise the tier. The decision goes to
 the `decisions` table through the `record_decision` MCP tool. Tier HUMAN (or open questions) pauses the graph with a
 LangGraph `interrupt`; the checkpoint is in SQLite, so `resume_ticket` works after a restart.
+`failed -> intent` is the one way out of `failed`: `reopen_ticket` uses it to run a failed ticket again on
+a fresh thread (a ticket with a pull request cannot be reopened).
 
 ```python
 from sifu.demo import open_demo, run_router_demo, answer_request
@@ -331,6 +333,14 @@ job starts or ends. Run only one Streamlit server per database. There are three 
   a merge decision). The ticket resumes from its checkpoint in the background. A plan or merge
   decision needs the build tools; without them it shows what is missing and the
   `scripts/live_run.py --answer` command instead.
+
+When something stops, the app has a button for it. A build that gave up (verify or the critics ran
+out of rounds, or made no progress) and a merge blocked by a red check each open a request with
+`retry` and `close`; a stuck build also takes `retry with a note`, and the note reaches the
+implementer as a finding. A retry after a draft pull request updates that same pull request and takes
+it out of draft once the checks pass. **Reopen** on a failed ticket runs it again from the Design
+stage with its token budget starting again; it is not offered once the ticket has a pull request.
+**Resume** continues a run that was cut off when the app stopped, in the mode it started in.
 
 Chats are kept. Every message is stored in the `chat_messages` table as it is sent, with the
 draft as it stood after each reply. When a ticket starts, its intent chat is linked to it and

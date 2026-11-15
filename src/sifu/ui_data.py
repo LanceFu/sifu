@@ -19,7 +19,7 @@ from sifu.models import DecisionType, RiskTier, TicketStatus
 BUILD_KINDS = ("implementer_result", "pr_opened", "draft_pr_opened")
 LIVE_DECISIONS = (DecisionType.ACCEPT_PLAN.value, DecisionType.MERGE.value)
 # The graph reads an answer that starts with one of these as a command; anything else is feedback.
-COMMANDS = ("approve", "close")
+COMMANDS = ("approve", "close", "retry")
 # What "key events only" keeps: who decided what, what the tools found and what reached GitHub.
 KEY_KINDS = frozenset(
     {
@@ -34,6 +34,12 @@ KEY_KINDS = frozenset(
         "critic_no_progress",
         "design_round_cap",
         "build_requested",
+        "build_retried",
+        "run_resumed",
+        "ticket_reopened",
+        "merge_retried",
+        "pr_updated",
+        "draft_pr_updated",
         "pr_opened",
         "draft_pr_opened",
         "merge_blocked",
@@ -180,7 +186,9 @@ def _summarise(kind: str, p: dict[str, Any]) -> tuple[str, list[str]]:
         files = p.get("changed_files") or []
         result = "ok" if p.get("ok") else f"failed ({p.get('error')})"
         return f"{result}: {p.get('num_turns')} turns, {len(files)} files changed", list(files)
-    if kind in ("pr_opened", "draft_pr_opened"):
+    if kind == "build_retried":
+        return p.get("note") or "no note", []
+    if kind in ("pr_opened", "draft_pr_opened", "pr_updated", "draft_pr_updated"):
         return f"#{p.get('number')} {p.get('url', '')}".strip(), []
     if kind == "pr_merged":
         return f"#{p.get('number')} merged", []
@@ -284,12 +292,25 @@ def inbox(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "actions": [o for o in options if o in COMMANDS],
                 "created_at": r["created_at"],
                 "stage": r["decision_type"],
+                "takes_note": "retry with a note" in options,
                 "rules": json.loads(r["rules_fired"] or "[]"),
                 "needs_live_tools": r["ticket_id"] in past_design
                 or r["decision_type"] in LIVE_DECISIONS,
             }
         )
     return items
+
+
+def can_reopen(conn: sqlite3.Connection, ticket_id: int) -> bool:
+    """True for a failed ticket that never opened a pull request."""
+    ticket = conn.execute("SELECT status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+    if ticket is None or ticket["status"] != TicketStatus.FAILED.value:
+        return False
+    has_pr = conn.execute(
+        "SELECT 1 FROM events WHERE ticket_id = ? AND kind IN ('pr_opened', 'draft_pr_opened')",
+        (ticket_id,),
+    ).fetchone()
+    return has_pr is None
 
 
 def design_request(conn: sqlite3.Connection, ticket_id: int) -> dict[str, Any] | None:

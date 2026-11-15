@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -190,11 +191,7 @@ class Deps:
     def check_budget(self, ticket_id: int) -> None:
         """Stop a ticket that has spent its token budget. Called before every model call."""
         with self.lock:
-            used = self.conn.execute(
-                "SELECT COALESCE(SUM(COALESCE(prompt_tokens, 0)"
-                " + COALESCE(completion_tokens, 0)), 0) FROM runs WHERE ticket_id = ?",
-                (ticket_id,),
-            ).fetchone()[0]
+            used = db.tokens_used(self.conn, ticket_id)
         limit = self.cfg.router.max_tokens_per_ticket
         if used >= limit:
             self.log(ticket_id, "budget_exceeded", "supervisor", {"used": used, "limit": limit})
@@ -564,6 +561,57 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
             )
         return {"wait_kind": "decision", "request_id": request_id, "status": "needs_human"}
 
+    def escalate_stuck(state: TicketState) -> TicketState:
+        """Build gave up (or the merge was blocked): ask a person to retry or close.
+
+        The ticket is already needs_human; the node that gave up moved it.
+        """
+        tid = state["ticket_id"]
+        if state.get("outcome") == "merge_blocked":
+            question = (
+                f"The merge of {state.get('pr_url')} was blocked because the required check is "
+                "not green. Answer retry once the check passes, or close."
+            )
+            options = ["retry", "close"]
+        else:
+            question = (
+                f"Build stopped after {state.get('build_round', 0)} rounds "
+                f"({state.get('outcome')}); {len(state.get('findings') or [])} findings remain."
+            )
+            if state.get("pr_url"):
+                question += f" Draft pull request: {state['pr_url']}."
+            question += " Answer retry to run Build again (add a note to guide it), or close."
+            options = ["retry", "retry with a note", "close"]
+        with deps.lock:
+            request_id = db.open_human_request(deps.conn, tid, question, options)
+        return {"wait_kind": "stuck", "request_id": request_id, "status": "needs_human"}
+
+    def retry_merge(state: TicketState) -> TicketState:
+        """A person asked for the merge again: the ticket goes back to Test and merge re-checks."""
+        tid = state["ticket_id"]
+        deps.move(tid, TicketStatus.TEST, state.get("facts", {}))
+        deps.log(tid, "merge_retried", "human", {})
+        return {"status": "test", "outcome": ""}
+
+    def retry_build(state: TicketState) -> TicketState:
+        """A person asked for Build again: keep the findings, add the note, restart the rounds."""
+        tid = state["ticket_id"]
+        answer = state["answer"].strip()
+        note = re.sub(r"^retry", "", answer, flags=re.IGNORECASE).strip(" :,-\n")
+        deps.log(tid, "build_retried", "human", {"note": note[:500]})
+        findings = list(state.get("findings") or [])
+        if note:
+            findings.append(
+                {"source": "human", "message": note, "file": "", "line": None, "rule": "note"}
+            )
+        return {
+            "findings": findings,
+            "build_round": 0,
+            "fingerprint": "",
+            "outcome": "",
+            "status": "build",
+        }
+
     def await_human(state: TicketState) -> TicketState:
         with deps.lock:
             request = deps.conn.execute(
@@ -584,6 +632,10 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
 
     def after_answer(state: TicketState) -> str:
         answer = state["answer"].strip().lower()
+        if state["wait_kind"] == "stuck":
+            if answer.startswith("close"):
+                return "close_ticket"
+            return "retry_merge" if state.get("outcome") == "merge_blocked" else "retry_build"
         if answer.startswith("close"):
             return "close_ticket"
         if state["wait_kind"] == "decision" and answer.startswith("approve"):
@@ -753,7 +805,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
     def after_verify(state: TicketState) -> str:
         can_publish = deps.github is not None and deps.publisher is not None and state.get("branch")
         if state.get("status") == "needs_human":
-            return "draft_pr" if can_publish else END
+            return "draft_pr" if can_publish else "escalate_stuck"
         if state.get("findings"):
             return "build"
         if critic_on(state):
@@ -864,7 +916,7 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
     def after_critic(state: TicketState) -> str:
         can_publish = deps.github is not None and deps.publisher is not None and state.get("branch")
         if state.get("status") == "needs_human":
-            return "draft_pr" if can_publish else END
+            return "draft_pr" if can_publish else "escalate_stuck"
         if state.get("findings"):
             return "build"
         return "open_pr" if can_publish else "done"
@@ -897,6 +949,28 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         spec_text = Path(state["spec_path"]).read_text(encoding="utf-8")
         verify_event = [e for e in db.list_events(deps.conn, tid) if e["kind"] == "verify_result"]
         verify = json.loads(verify_event[-1]["payload"]) if verify_event else None
+        if state.get("pr_number"):  # a retry after a draft pull request: update that one
+            number = state["pr_number"]
+            try:
+                sha = deps.publisher(
+                    state["worktree"], state["branch"], f"{state['title']} (#{tid})"
+                )
+                deps.github.mark_ready(number)
+                deps.github.comment(
+                    number,
+                    "Sifu: the checks now pass after a retry; this pull request is ready for "
+                    "review.",
+                )
+            except (GitHubError, PublishError) as exc:
+                return fail(tid, "pr_failed", exc)
+            deps.log(
+                tid,
+                "pr_updated",
+                "supervisor",
+                {"number": number, "url": state.get("pr_url"), "sha": sha},
+            )
+            post_critic_notes(state, number)
+            return {"head_sha": sha}
         try:
             sha = deps.publisher(state["worktree"], state["branch"], f"{state['title']} (#{tid})")
             number, url = deps.github.create_pr(
@@ -917,6 +991,27 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         assert deps.github is not None and deps.publisher is not None
         findings = state.get("findings", [])
         reason = state.get("outcome", "")
+        if state.get("pr_number"):  # a retry that gave up again: update the existing draft
+            number = state["pr_number"]
+            try:
+                sha = deps.publisher(
+                    state["worktree"], state["branch"], f"{state['title']} (#{tid})"
+                )
+                deps.github.comment(
+                    number, render_findings(reason, state.get("build_round", 0), findings)
+                )
+            except (GitHubError, PublishError) as exc:
+                deps.log(
+                    tid, "error", "supervisor", {"type": type(exc).__name__, "message": str(exc)}
+                )
+                return {}
+            deps.log(
+                tid,
+                "draft_pr_updated",
+                "supervisor",
+                {"number": number, "url": state.get("pr_url"), "sha": sha},
+            )
+            return {"head_sha": sha}
         try:
             sha = deps.publisher(state["worktree"], state["branch"], f"{state['title']} (#{tid})")
             number, url = deps.github.create_pr(
@@ -1061,6 +1156,10 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         deps.log(tid, "pr_merged", "supervisor", {"number": state["pr_number"]})
         return {"facts": facts, "status": "done"}
 
+    def after_merge(state: TicketState) -> str:
+        blocked = state.get("outcome") == "merge_blocked" and state.get("status") == "needs_human"
+        return "escalate_stuck" if blocked else END
+
     def done(state: TicketState) -> TicketState:  # stub
         deps.move(state["ticket_id"], TicketStatus.DONE, state.get("facts"))
         return {"status": "done"}
@@ -1075,6 +1174,9 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
         "plan": plan,
         "escalate_questions": escalate_questions,
         "escalate_decision": escalate_decision,
+        "escalate_stuck": escalate_stuck,
+        "retry_build": retry_build,
+        "retry_merge": retry_merge,
         "await_human": await_human,
         "approve_decision": approve_decision,
         "revise": revise,
@@ -1104,26 +1206,33 @@ def build_graph(deps: Deps, prompts_dir: Path = PROMPTS_DIR) -> CompiledStateGra
     graph.add_conditional_edges("plan", after_plan, ["plan_gate", "escalate_decision"])
     graph.add_edge("escalate_questions", "await_human")
     graph.add_edge("escalate_decision", "await_human")
+    graph.add_edge("escalate_stuck", "await_human")
     graph.add_conditional_edges(
-        "await_human", after_answer, ["close_ticket", "approve_decision", "revise"]
+        "await_human",
+        after_answer,
+        ["close_ticket", "approve_decision", "revise", "retry_build", "retry_merge"],
     )
+    graph.add_edge("retry_build", "build")
+    graph.add_edge("retry_merge", "merge")
     graph.add_conditional_edges("revise", after_revise, ["load", END])
     graph.add_edge("close_ticket", END)
     graph.add_conditional_edges("plan_gate", after_gate, ["build", END])
     graph.add_conditional_edges("build", after_build, ["verify", END])
     graph.add_conditional_edges(
-        "verify", after_verify, ["build", "critic", "done", "open_pr", "draft_pr", END]
+        "verify",
+        after_verify,
+        ["build", "critic", "done", "open_pr", "draft_pr", "escalate_stuck", END],
     )
-    graph.add_edge("draft_pr", END)
+    graph.add_edge("draft_pr", "escalate_stuck")
     graph.add_conditional_edges(
-        "critic", after_critic, ["build", "open_pr", "draft_pr", "done", END]
+        "critic", after_critic, ["build", "open_pr", "draft_pr", "escalate_stuck", "done", END]
     )
     graph.add_conditional_edges("open_pr", after_pr, ["merge_decision", END])
     graph.add_conditional_edges(
         "merge_decision", after_merge_decision, ["merge", "escalate_decision"]
     )
     graph.add_conditional_edges("approve_decision", after_approve, ["plan", "plan_gate", "merge"])
-    graph.add_edge("merge", END)
+    graph.add_conditional_edges("merge", after_merge, ["escalate_stuck", END])
     graph.add_edge("done", END)
     return graph.compile(checkpointer=deps.checkpointer)
 
@@ -1143,13 +1252,20 @@ def _result_payload(result: Any) -> dict[str, Any]:
     }
 
 
-def _thread(ticket_id: int) -> dict[str, Any]:
-    return {"configurable": {"thread_id": f"ticket-{ticket_id}"}}
+def _thread(deps: Deps, ticket_id: int) -> dict[str, Any]:
+    """The LangGraph thread of the ticket's current attempt: a reopen starts a fresh one."""
+    with deps.lock:
+        reopens = deps.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE ticket_id = ? AND kind = 'ticket_reopened'",
+            (ticket_id,),
+        ).fetchone()[0]
+    suffix = f"-r{reopens}" if reopens else ""
+    return {"configurable": {"thread_id": f"ticket-{ticket_id}{suffix}"}}
 
 
 def _invoke(deps: Deps, ticket_id: int, payload: Any, prompts_dir: Path) -> dict[str, Any]:
     try:
-        return build_graph(deps, prompts_dir).invoke(payload, _thread(ticket_id))
+        return build_graph(deps, prompts_dir).invoke(payload, _thread(deps, ticket_id))
     except Exception as exc:
         deps.log(
             ticket_id, "error", "supervisor", {"type": type(exc).__name__, "message": str(exc)}
@@ -1178,7 +1294,7 @@ def resume_ticket(
 ) -> dict[str, Any]:
     """Give a paused ticket the human's answer and continue it from its checkpoint."""
     # Without a pending interrupt LangGraph would restart the graph from empty state.
-    if not build_graph(deps, prompts_dir).get_state(_thread(ticket_id)).interrupts:
+    if not build_graph(deps, prompts_dir).get_state(_thread(deps, ticket_id)).interrupts:
         raise ValueError(f"ticket {ticket_id} has no paused checkpoint to resume")
     return _invoke(deps, ticket_id, Command(resume=answer), prompts_dir)
 
@@ -1186,7 +1302,7 @@ def resume_ticket(
 def continue_ticket(deps: Deps, ticket_id: int, prompts_dir: Path = PROMPTS_DIR) -> dict[str, Any]:
     """Continue a ticket whose accepted spec stopped at the plan gate: plan (if on), then Build."""
     graph = build_graph(deps, prompts_dir)
-    snapshot = graph.get_state(_thread(ticket_id))
+    snapshot = graph.get_state(_thread(deps, ticket_id))
     facts = dict(snapshot.values.get("facts") or {})
     status = db.get_ticket(deps.conn, ticket_id)["status"]
     if snapshot.interrupts:
@@ -1201,7 +1317,51 @@ def continue_ticket(deps: Deps, ticket_id: int, prompts_dir: Path = PROMPTS_DIR)
         facts["plan_accepted"] = True  # no plan to accept, as scripts/live_run.py does up front
     deps.log(ticket_id, "build_requested", "human", {})
     # as_node="accept" makes LangGraph evaluate after_accept: the plan if on, else the plan gate
-    graph.update_state(_thread(ticket_id), {"facts": facts}, as_node="accept")
+    graph.update_state(_thread(deps, ticket_id), {"facts": facts}, as_node="accept")
+    return _invoke(deps, ticket_id, None, prompts_dir)
+
+
+def reopen_ticket(
+    deps: Deps,
+    ticket_id: int,
+    facts: dict[str, bool] | None = None,
+    prompts_dir: Path = PROMPTS_DIR,
+) -> dict[str, Any]:
+    """Run a failed ticket again from the start on a fresh thread, with a fresh token budget.
+
+    A ticket with a pull request cannot be reopened. The old worktree is discarded.
+    """
+    status = db.get_ticket(deps.conn, ticket_id)["status"]
+    if status != TicketStatus.FAILED.value:
+        raise ValueError(f"ticket {ticket_id} is {status}, not failed")
+    with deps.lock:
+        has_pr = deps.conn.execute(
+            "SELECT 1 FROM events WHERE ticket_id = ? AND kind IN ('pr_opened', 'draft_pr_opened')",
+            (ticket_id,),
+        ).fetchone()
+    if has_pr:
+        raise ValueError(f"ticket {ticket_id} has a pull request; create a new ticket instead")
+    discard = getattr(deps.implementer, "discard", None)
+    if discard is not None:
+        discard(ticket_id)
+    with deps.lock:
+        runs_before = deps.conn.execute("SELECT COALESCE(MAX(id), 0) FROM runs").fetchone()[0]
+    deps.move(ticket_id, TicketStatus.INTENT)
+    deps.log(ticket_id, "ticket_reopened", "human", {"runs_before": runs_before})
+    return run_ticket(deps, ticket_id, facts, prompts_dir)
+
+
+def resume_interrupted(
+    deps: Deps, ticket_id: int, prompts_dir: Path = PROMPTS_DIR
+) -> dict[str, Any]:
+    """Continue a run that was cut off mid-graph (the app stopped) from its last checkpoint."""
+    graph = build_graph(deps, prompts_dir)
+    snapshot = graph.get_state(_thread(deps, ticket_id))
+    if snapshot.interrupts:
+        raise ValueError(f"ticket {ticket_id} is waiting for an answer, not cut off")
+    if not snapshot.next:
+        raise ValueError(f"ticket {ticket_id} has nothing to resume")
+    deps.log(ticket_id, "run_resumed", "human", {"next": list(snapshot.next)})
     return _invoke(deps, ticket_id, None, prompts_dir)
 
 

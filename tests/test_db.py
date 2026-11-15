@@ -183,3 +183,14 @@ def test_list_jobs_is_newest_first(conn, ticket):
     first = db.create_job(conn, "lessons", {})
     second = db.create_job(conn, "lessons", {})
     assert [r["id"] for r in db.list_jobs(conn)] == [second, first]
+
+
+def test_tokens_used_counts_only_calls_since_the_last_reopen(conn, ticket):
+    db.record_run(conn, "reviewer", "m", ticket, 100, 50)
+    db.record_run(conn, "reviewer", "m", ticket, None, None)  # missing counts are zero
+    assert db.tokens_used(conn, ticket) == 150
+    before = conn.execute("SELECT MAX(id) FROM runs").fetchone()[0]
+    db.append_event(conn, ticket, "ticket_reopened", "human", {"runs_before": before})
+    assert db.tokens_used(conn, ticket) == 0
+    db.record_run(conn, "reviewer", "m", ticket, 10, 5)
+    assert db.tokens_used(conn, ticket) == 15

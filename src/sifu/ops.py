@@ -10,7 +10,7 @@ from pathlib import Path
 from sifu import db, demo
 from sifu import live as live_wiring
 from sifu.config import Config, load_config
-from sifu.graph import Deps, continue_ticket, run_ticket
+from sifu.graph import Deps, continue_ticket, reopen_ticket, resume_interrupted, run_ticket
 from sifu.llm import LLM
 
 
@@ -72,6 +72,41 @@ def run(
         # without the planner there is no plan to accept, so the gate is opened up front
         facts = {"plan_accepted": True} if live and not deps.cfg.planner.enabled else {}
         run_ticket(deps, ticket_id, facts=facts)
+        return _status(deps, ticket_id)
+    finally:
+        deps.conn.close()
+
+
+def reopen(
+    db_path: str | Path,
+    ticket_id: int,
+    *,
+    live: bool,
+    cfg: Config | None = None,
+    llm: LLM | None = None,
+) -> str:
+    """Run a failed ticket again from the start; return its status."""
+    deps = open_deps(db_path, live=live, cfg=cfg, llm=llm)
+    try:
+        facts = {"plan_accepted": True} if live and not deps.cfg.planner.enabled else {}
+        reopen_ticket(deps, ticket_id, facts)
+        return _status(deps, ticket_id)
+    finally:
+        deps.conn.close()
+
+
+def resume(
+    db_path: str | Path,
+    ticket_id: int,
+    *,
+    live: bool,
+    cfg: Config | None = None,
+    llm: LLM | None = None,
+) -> str:
+    """Continue a run that was cut off from its last checkpoint; return its status."""
+    deps = open_deps(db_path, live=live, cfg=cfg, llm=llm)
+    try:
+        resume_interrupted(deps, ticket_id)
         return _status(deps, ticket_id)
     finally:
         deps.conn.close()

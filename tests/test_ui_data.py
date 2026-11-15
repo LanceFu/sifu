@@ -275,3 +275,22 @@ def test_awaiting_build_is_a_spec_ticket_whose_last_step_was_the_plan_gate(conn,
     db.append_event(conn, asked, "awaiting_plan", "supervisor", {})
     db.open_human_request(conn, asked, "Approve?", ["approve", "close"])
     assert ui_data.awaiting_build(conn, asked) is False  # a request is open
+
+
+def test_can_reopen_is_a_failed_ticket_without_a_pull_request(conn, project):
+    failed = db.create_ticket(conn, project, "Rename a Trip")
+    db.set_status(conn, failed, TicketStatus.FAILED)
+    with_pr = db.create_ticket(conn, project, "Limit a Day Plan")
+    db.append_event(conn, with_pr, "draft_pr_opened", "supervisor", {"number": 2, "url": PR_URL})
+    db.set_status(conn, with_pr, TicketStatus.FAILED)
+    alive = db.create_ticket(conn, project, "Remove a Stop")
+    assert [ui_data.can_reopen(conn, t) for t in (failed, with_pr, alive)] == [True, False, False]
+
+
+def test_a_stuck_build_request_offers_retry_and_close_and_takes_a_note(conn, project):
+    tid = db.create_ticket(conn, project, "Rename a Trip")
+    db.append_event(conn, tid, "implementer_result", "implementer", {"ok": True})
+    db.open_human_request(conn, tid, "Build stopped", ["retry", "retry with a note", "close"])
+    [item] = ui_data.inbox(conn)
+    assert item["actions"] == ["retry", "close"] and item["takes_note"] is True
+    assert item["needs_live_tools"] is True

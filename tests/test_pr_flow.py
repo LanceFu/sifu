@@ -40,7 +40,7 @@ class FakeGitHub:
         self.ci = list(ci)
         self.fail_on = fail_on
         self.merged = merged
-        self.comments, self.merges, self.polls = [], [], 0
+        self.comments, self.merges, self.polls, self.ready = [], [], 0, []
 
     def _maybe_fail(self, what):
         if self.fail_on == what:
@@ -53,6 +53,9 @@ class FakeGitHub:
 
     def comment(self, number, body):
         self.comments.append((number, body))
+
+    def mark_ready(self, number):
+        self.ready.append(number)
 
     def ci_status(self, sha):
         self._maybe_fail("ci_status")
@@ -123,6 +126,37 @@ def test_approving_while_the_check_is_still_red_blocks_the_merge(conn, make_deps
     final = resume_ticket(deps, ticket, "approve")
     assert final["outcome"] == "merge_blocked" and gh.merges == []
     assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+    assert is_paused(final)
+    [request] = db.open_requests(conn)
+    assert json.loads(request["options"]) == ["retry", "close"]
+
+
+def test_retrying_a_blocked_merge_merges_once_the_check_is_green(conn, make_deps, make_ticket):
+    gh = FakeGitHub(ci=("failure", "failure", "success"))
+    deps, ticket, _ = run(make_deps, make_ticket, gh)
+    resume_ticket(deps, ticket, "approve")  # still red: blocked
+    final = resume_ticket(deps, ticket, "retry")
+    assert final["status"] == "done" and len(gh.merges) == 1
+    assert "merge_retried" in kinds(conn, ticket)
+    assert db.get_ticket(conn, ticket)["status"] == "done"
+
+
+def test_retrying_while_the_check_is_still_red_blocks_again(conn, make_deps, make_ticket):
+    gh = FakeGitHub(ci=("failure",))
+    deps, ticket, _ = run(make_deps, make_ticket, gh)
+    resume_ticket(deps, ticket, "approve")
+    final = resume_ticket(deps, ticket, "retry")
+    assert is_paused(final) and gh.merges == []
+    assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+    assert len(db.open_requests(conn)) == 1
+
+
+def test_closing_a_blocked_merge_fails_the_ticket_without_merging(conn, make_deps, make_ticket):
+    gh = FakeGitHub(ci=("failure",))
+    deps, ticket, _ = run(make_deps, make_ticket, gh)
+    resume_ticket(deps, ticket, "approve")
+    resume_ticket(deps, ticket, "close")
+    assert db.get_ticket(conn, ticket)["status"] == "failed" and gh.merges == []
 
 
 def test_a_human_who_does_not_approve_closes_the_ticket_and_leaves_the_pr(
@@ -219,6 +253,9 @@ def test_a_verify_cap_opens_a_draft_pr_with_the_findings(conn, cfg, make_deps, m
     assert "swiftlint [len] Sources/Trip.swift:4" in gh.comments[0][1]
     assert "draft_pr_opened" in kinds(conn, ticket)
     assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+    assert is_paused(state)
+    [request] = db.open_requests(conn)
+    assert "https://github.com/o/r/pull/7" in request["question"]
 
 
 def test_a_draft_pr_failure_leaves_the_ticket_waiting_for_a_human(
@@ -233,6 +270,32 @@ def test_a_draft_pr_failure_leaves_the_ticket_waiting_for_a_human(
     state = run_ticket(deps, ticket, facts={"plan_accepted": True})
     assert state["outcome"] == "verify_cap"
     assert db.get_ticket(conn, ticket)["status"] == "needs_human"
+    assert is_paused(state) and len(db.open_requests(conn)) == 1
+
+
+def test_a_retry_after_a_draft_pr_updates_that_pr_and_marks_it_ready(
+    conn, cfg, make_deps, make_ticket
+):
+    cfg.router.max_build_iterations = 1
+    cfg.router.merge_mode = "manual"
+    deps = make_deps(FakeLLM())
+    deps.implementer = Implementer()
+    results = iter(
+        [VerifyResult(False, [Finding("swiftlint", "Too long", "Sources/Trip.swift", 4, "len")])]
+    )
+    deps.verifier = lambda tid, spec: next(results, VerifyResult(True))
+    gh = FakeGitHub()
+    created = []
+    original = gh.create_pr
+    gh.create_pr = lambda **kw: created.append(kw["draft"]) or original(**kw)
+    deps.github, deps.publisher, deps.sleep = gh, publisher, lambda s: None
+    ticket = make_ticket("T", BODY)
+    assert is_paused(run_ticket(deps, ticket, facts={"plan_accepted": True}))
+    state = resume_ticket(deps, ticket, "retry")
+    assert created == [True]  # one pull request, opened as a draft, never a second
+    assert gh.ready == [7]
+    assert "pr_updated" in kinds(conn, ticket)
+    assert is_paused(state)  # manual merge mode: now waiting on the merge decision
 
 
 def test_findings_comment_names_the_reason():
