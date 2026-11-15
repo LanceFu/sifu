@@ -10,37 +10,69 @@ graph TD;
 	synthesize(synthesize)
 	route(route)
 	accept(accept)
+	plan(plan)
 	escalate_questions(escalate_questions)
 	escalate_decision(escalate_decision)
+	escalate_stuck(escalate_stuck)
+	retry_build(retry_build)
+	retry_merge(retry_merge)
 	await_human(await_human)
 	approve_decision(approve_decision)
 	revise(revise)
 	close_ticket(close_ticket)
 	plan_gate(plan_gate)
 	build(build)
-	test(test)
+	verify(verify)
+	open_pr(open_pr)
+	draft_pr(draft_pr)
+	critic(critic)
+	merge_decision(merge_decision)
+	merge(merge)
 	done(done)
 	review_ambiguity(review_ambiguity)
 	review_scope(review_scope)
 	review_policy(review_policy)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load;
-	accept --> plan_gate;
-	approve_decision --> plan_gate;
+	accept -.-> plan;
+	accept -.-> plan_gate;
+	approve_decision -.-> merge;
+	approve_decision -.-> plan;
+	approve_decision -.-> plan_gate;
 	await_human -.-> approve_decision;
 	await_human -.-> close_ticket;
+	await_human -.-> retry_build;
+	await_human -.-> retry_merge;
 	await_human -.-> revise;
 	build -.-> __end__;
-	build -.-> test;
+	build -.-> verify;
 	checks --> synthesize;
+	critic -.-> __end__;
+	critic -.-> build;
+	critic -.-> done;
+	critic -.-> draft_pr;
+	critic -.-> escalate_stuck;
+	critic -.-> open_pr;
+	draft_pr --> escalate_stuck;
 	escalate_decision --> await_human;
 	escalate_questions --> await_human;
+	escalate_stuck --> await_human;
 	load --> checks;
 	load --> review_ambiguity;
 	load --> review_policy;
 	load --> review_scope;
+	merge -.-> __end__;
+	merge -.-> escalate_stuck;
+	merge_decision -.-> escalate_decision;
+	merge_decision -.-> merge;
+	open_pr -.-> __end__;
+	open_pr -.-> merge_decision;
+	plan -.-> escalate_decision;
+	plan -.-> plan_gate;
 	plan_gate -.-> __end__;
 	plan_gate -.-> build;
+	retry_build --> build;
+	retry_merge --> merge;
 	review_ambiguity --> synthesize;
 	review_policy --> synthesize;
 	review_scope --> synthesize;
@@ -50,9 +82,16 @@ graph TD;
 	route -.-> escalate_decision;
 	synthesize -.-> escalate_questions;
 	synthesize -.-> route;
-	test --> done;
+	verify -.-> __end__;
+	verify -.-> build;
+	verify -.-> critic;
+	verify -.-> done;
+	verify -.-> draft_pr;
+	verify -.-> escalate_stuck;
+	verify -.-> open_pr;
 	close_ticket --> __end__;
 	done --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
+
