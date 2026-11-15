@@ -1200,7 +1200,7 @@ def continue_ticket(deps: Deps, ticket_id: int, prompts_dir: Path = PROMPTS_DIR)
     if not deps.cfg.planner.enabled:
         facts["plan_accepted"] = True  # no plan to accept, as scripts/live_run.py does up front
     deps.log(ticket_id, "build_requested", "human", {})
-    # as_node="accept" makes LangGraph evaluate after_accept: plan if the planner is on, else the gate
+    # as_node="accept" makes LangGraph evaluate after_accept: the plan if on, else the plan gate
     graph.update_state(_thread(ticket_id), {"facts": facts}, as_node="accept")
     return _invoke(deps, ticket_id, None, prompts_dir)
 
