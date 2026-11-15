@@ -180,3 +180,45 @@ def test_inbox_question_headings_are_demoted_to_bold(conn, project):
     assert ui_data.inbox(conn)[0]["question"] == (
         "Needs answers:\n\n**Questions for ticket 1**\n\n1. Which?"
     )
+
+
+def test_chats_groups_a_tickets_messages_by_session_in_order(conn, project):
+    tid = db.create_ticket(conn, project, "Rename a Trip")
+    db.add_chat_message(conn, "a", "intent", "user", "Rename it.", ticket_id=tid)
+    db.add_chat_message(conn, "b", "spec", "user", "Why stopped?", ticket_id=tid)
+    db.add_chat_message(conn, "a", "intent", "assistant", "To what?", ticket_id=tid)
+    db.add_chat_message(conn, "elsewhere", "intent", "user", "Not this ticket.")
+    found = ui_data.chats(conn, tid)
+    assert [(c["session"], c["stage"], len(c["messages"])) for c in found] == [
+        ("a", "intent", 2),
+        ("b", "spec", 1),
+    ]
+    assert [m["content"] for m in ui_data.chat_messages(conn, "a")] == ["Rename it.", "To what?"]
+
+
+def test_chat_queries_are_empty_on_a_database_recorded_before_chats(conn, project):
+    tid = db.create_ticket(conn, project, "Rename a Trip")
+    conn.execute("DROP TABLE chat_messages")
+    assert ui_data.chats(conn, tid) == [] and ui_data.chat_messages(conn, "a") == []
+
+
+def test_a_saved_chat_is_a_key_event_on_the_timeline(conn, project):
+    tid = db.create_ticket(conn, project, "Rename a Trip")
+    db.append_event(
+        conn, tid, "chat_saved", "human", {"stage": "intent", "messages": 4, "path": "/a/chat.md"}
+    )
+    row = ui_data.timeline(conn, tid, key_only=True)[-1]
+    assert (row["summary"], row["detail"]) == ("intent chat, 4 messages", ["/a/chat.md"])
+
+
+def test_design_request_is_the_open_request_the_ui_can_answer(conn, project):
+    spec = db.create_ticket(conn, project, "Rename a Trip")
+    db.open_human_request(conn, spec, "Approve?", ["approve", "close"], decide(conn, spec))
+    merge = db.create_ticket(conn, project, "Limit a Day Plan")
+    db.open_human_request(
+        conn, merge, "Merge?", ["approve", "close"], decide(conn, merge, DecisionType.MERGE)
+    )
+    idle = db.create_ticket(conn, project, "Remove a Stop")
+    assert ui_data.design_request(conn, spec)["question"] == "Approve?"
+    assert ui_data.design_request(conn, merge) is None
+    assert ui_data.design_request(conn, idle) is None

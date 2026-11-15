@@ -15,7 +15,7 @@ Course project for Agentic AI (University of Waterloo). The target product is th
 | Planner, headless Claude Code implementer, verify loop, GitHub PR and merge flow | Done; run live on `tripplanner-ios` (PRs #2 to #5) |
 | LLM critic pass | Done; off by default (`critic.enabled`) |
 | Evaluation (golden tickets against a single-prompt baseline, golden diffs for the critics) | Done; results in the notebook |
-| Streamlit UI (board, ticket timeline, inbox) | Done; see Streamlit UI |
+| Streamlit UI (board with new-ticket chat, ticket timeline with spec chat, inbox) | Done; see Streamlit UI |
 
 ## Setup
 
@@ -58,12 +58,14 @@ config.yaml            every setting; see Configuration
 src/sifu/models.py     enums and Pydantic models for findings, assessments and decisions
 src/sifu/state.py      ticket state machine and stage gates
 src/sifu/router.py     floor rules and the final tier
-src/sifu/db.py         SQLite tables: projects, tickets, events, decisions, human_requests, runs
+src/sifu/db.py         SQLite tables: projects, tickets, events, decisions, human_requests, runs,
+                       chat_messages
 src/sifu/graph.py      the LangGraph ticket graph: every node and edge
 src/sifu/reviewers.py, synthesizer.py, planner.py, critic.py, assessors.py   the model agents
 src/sifu/implementer.py, verify.py, pr_flow.py, github.py                    Build, Test and merge
 src/sifu/evalset.py, evalrun.py, baseline.py, golden.py, report.py           evaluation
 src/sifu/evidence.py   notebook tables read from a recorded database
+src/sifu/brainstorm.py the intent and spec chats: a model that talks and drafts, with no tools
 src/sifu/ui_data.py, ui.py   the Streamlit UI and the queries behind it
 src/sifu/prompts/      persona, rubric and few-shot files for each agent
 scripts/               live runs, probes and the evaluation harness
@@ -295,16 +297,40 @@ without it; report them side by side.
 uv run --extra agents --extra ui streamlit run src/sifu/ui.py
 ```
 
-Pick a database from `data/` in the sidebar (set `SIFU_UI_DB` to open one first). The app reads
-it read-only and has three views:
+Pick a database from `data/` in the sidebar (set `SIFU_UI_DB` to open one first). Looking at a
+tab only reads the database; sending a chat message, starting a ticket and answering a request
+write to it. There are three tabs:
 
-- **Board:** tickets by status, each with its pull request link.
+- **Board:** tickets by status, each with its pull request link. "New ticket" swaps the board for
+  a draft: the chat is on the left, where you talk the change through with the model
+  (`models.author`) before a ticket exists, and the preview is on the right, with the title and
+  description as they would be filed. The model rewrites the preview as you talk; edit it
+  freely, and the next reply builds on your edits. Captions under the preview list what the
+  intent template still lacks (a Given / When / Then line, a REQ id, `OPEN:` lines). "Cancel"
+  goes back to the board. "Create" files the draft as a ticket and runs the Design stage:
+  `intent.md` is rendered from the draft, then the reviewers write a spec or questions. A
+  low-risk spec is accepted by the router as before; anything else stops for you. The planner
+  is off for this run, so an accepted spec waits before Build.
 - **Ticket:** one ticket's timeline. Router decisions show the floor and final tier, the rules
   that fired and each assessor's rationale. "Key events only" hides tool calls and status changes.
+  A ticket stopped at a Design-stage request also shows the spec (or the questions) beside a
+  second chat, and a reply box the chat drafts for you: `approve`, `close` or send the reply,
+  which is added to the ticket and the Design stage runs again (up to `router.max_design_rounds`).
 - **Inbox:** open human requests. A Design-stage request is answered there (`approve`, `close`
   or a typed reply) and the ticket resumes from its checkpoint with the planner off, so it stops
   before Build. A plan or merge decision shows the `scripts/live_run.py --answer` command
   instead, because resuming it needs the real implementer and GitHub client.
+
+Chats are kept. Every message is stored in the `chat_messages` table as it is sent, with the
+draft as it stood after each reply. When a ticket starts, its intent chat is linked to it and
+written to `data/artifacts/<database>/<ticket>/chat-intent.md` beside `intent.md`; a spec chat is
+written to `chat-spec-<request>.md` when you answer. Both appear on the ticket's timeline
+(`chat_saved`) and under "Chat log" on the Ticket tab, with a download button. An intent chat's id
+is kept in the page URL, so reloading the page reopens it with its draft.
+
+The chat model has no tools: it cannot file, approve or change anything, and what it drafts is
+ticket text like any other, so it goes through the same checks, reviewers, assessors and risk
+floor rules.
 
 ## Recorded runs in the notebook
 
