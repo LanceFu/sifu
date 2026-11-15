@@ -29,7 +29,7 @@ from typing import Any
 
 import streamlit as st
 
-from sifu import brainstorm, db, demo, jobs, live, ops, settings, ui_data
+from sifu import brainstorm, db, demo, jobs, live, ops, preflight, settings, ui_data
 from sifu.evidence import DATA, open_recorded
 
 DB_ENV = "SIFU_UI_DB"  # open this database first instead of the newest one in data/
@@ -534,9 +534,22 @@ def _reset_options(db_path: Path) -> None:
         st.session_state.pop(f"opt-{key}", None)
 
 
+def _run_checks(db_path: Path) -> None:
+    """Button callback: run the setup checks and refresh the sidebar's build-tools line."""
+    st.session_state["checks"] = preflight.run_checks(ops.effective_config(db_path))
+    st.session_state.pop("live_missing", None)
+
+
 def show_settings(conn: sqlite3.Connection, db_path: Path) -> None:
-    """Run options and the read-only configuration. Saving happens in callbacks only."""
+    """Setup checks, run options and the read-only configuration; writes only in callbacks."""
     cfg = ops.effective_config(db_path)
+    st.markdown("**Setup checks**")
+    st.button("Run checks", key="checks_run", on_click=_run_checks, args=(db_path,))
+    for check in st.session_state.get("checks", []):
+        badge = ":green-badge[ok]" if check.ok else ":red-badge[missing]"
+        st.markdown(f"{badge} **{check.name}** — {check.detail}")
+        if check.needed_for == "build":
+            st.caption("needed for Build")
     st.markdown("**Run options**")
     st.caption(
         "These apply to this database only and override config.yaml. "

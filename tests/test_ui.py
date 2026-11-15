@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from sifu import brainstorm, db, demo, jobs, live, ops, settings, ui  # noqa: E402
+from sifu import brainstorm, db, demo, jobs, live, ops, preflight, settings, ui  # noqa: E402
 from sifu.models import (  # noqa: E402
     DecisionResult,
     DecisionType,
@@ -532,3 +532,17 @@ def test_changing_an_option_saves_it_for_this_database(database):
     assert not at.exception, at.exception
     assert settings.load(database) == {"router.merge_mode": "manual"}
     assert run("Settings").selectbox(key="opt-router.merge_mode").value == "manual"
+
+
+def test_settings_runs_the_setup_checks_on_demand_and_shows_each_result(database, monkeypatch):
+    results = [
+        preflight.Check("Ollama", True, "reachable", "design"),
+        preflight.Check("GitHub token", False, "No GitHub token found.", "build"),
+    ]
+    calls = []
+    monkeypatch.setattr(preflight, "run_checks", lambda cfg, **kw: calls.append(1) or results)
+    at = run("Settings")
+    assert calls == []  # opening the tab does not run them
+    at.button(key="checks_run").click().run()
+    page = text(at)
+    assert calls == [1] and "Ollama" in page and "No GitHub token found." in page
